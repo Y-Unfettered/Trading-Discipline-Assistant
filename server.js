@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { DatabaseSync } = require("node:sqlite");
 const {
@@ -80,7 +81,7 @@ function nextTradingDate(fromDate = new Date()) {
 }
 
 function migrateStore(store) {
-  store.schemaVersion = Math.max(3, Number(store.schemaVersion || 0));
+  store.schemaVersion = Math.max(4, Number(store.schemaVersion || 0));
   store.account ||= {};
   store.holdings ||= [];
   store.trades ||= [];
@@ -93,6 +94,10 @@ function migrateStore(store) {
   store.auditLog ||= [];
   store.stockPnlSnapshots ||= [];
   store.researchSnapshots ||= [];
+  store.plannedAssets ||= [];
+  store.evidenceRecords ||= [];
+  store.disciplineEvents ||= [];
+  store.planConfirmations ||= [];
   store.ledgerBaseline ||= {
     establishedAt: new Date().toISOString(),
     availableCash: Number(store.account.availableCash || 0),
@@ -292,9 +297,15 @@ function stockCatalog(store) {
     market,
     source: "holding"
   }));
+  const plannedAssets = (store.plannedAssets || []).map(({ code, name, market }) => ({
+    code: String(code),
+    name,
+    market,
+    source: "planned-asset"
+  }));
   const aShareStocks = loadAshareStocks();
   return [...new Map(
-    [...aShareStocks, ...holdings].map(stock => [stock.code, stock])
+    [...aShareStocks, ...plannedAssets, ...holdings].map(stock => [stock.code, stock])
   ).values()];
 }
 
@@ -313,6 +324,142 @@ async function searchStocks(store, query) {
       return score(a) - score(b) || a.code.localeCompare(b.code);
     });
   return keyword ? local.slice(0, 20) : [];
+}
+
+const PLAN_STATUSES = new Set(["draft", "pending_confirmation", "confirmed", "active", "adjusted", "invalidated", "completed", "archived"]);
+const ASSET_STATUSES = new Set(["watching", "researching", "planning", "planned", "paused", "archived"]);
+const EVIDENCE_KINDS = new Set(["fact", "analysis", "user_judgment"]);
+
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]))
+  }
+  return value;
+}
+
+function contentHash(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(stableValue(value))).digest("hex");
+}
+
+function planContent(plan) {
+  const ignored = new Set(["id", "version", "status", "createdAt", "updatedAt", "confirmedAt", "completedAt", "invalidatedAt", "confirmationId", "contentHash"]);
+  return Object.fromEntries(Object.entries(plan || {}).filter(([key]) => !ignored.has(key)));
+}
+
+function summarizePlanDiff(before, after) {
+  const oldValue = planContent(before);
+  const newValue = planContent(after);
+  const labels = {
+    planForDate: "适用日期", validFrom: "生效时间", validUntil: "失效时间", expectedReturn: "预期收益",
+    userMarketView: "用户市场判断", systemMarketView: "系统市场整理", accountRules: "账户级限制",
+    trainingFocus: "训练目标", rules: "标的规则", evidenceIds: "依据"
+  };
+  return [...new Set([...Object.keys(oldValue), ...Object.keys(newValue)])]
+    .filter(key => JSON.stringify(stableValue(oldValue[key])) !== JSON.stringify(stableValue(newValue[key])))
+    .map(key => labels[key] || key);
+}
+
+function normalizePlannedAsset(input, existing = {}) {
+  const code = cleanText(input.code || existing.code);
+  const name = cleanText(input.name || existing.name);
+  if (!/^\d{6}$/.test(code)) throw new Error("计划标的代码必须是6位数字");
+  if (!name) throw new Error("计划标的名称必须填写");
+  const status = cleanText(input.status || existing.status || "watching");
+  if (!ASSET_STATUSES.has(status)) throw new Error("计划标的状态不合法");
+  const now = new Date().toISOString();
+  return {
+    ...existing,
+    id: existing.id || `asset-${code}-${Date.now()}`,
+    code,
+    name,
+    market: cleanText(input.market || existing.market || (code.startsWith("6") ? "SH" : "SZ")),
+    status,
+    expectedReturn: cleanText(input.expectedReturn),
+    userMarketView: cleanText(input.userMarketView),
+    fundamentalView: cleanText(input.fundamentalView),
+    technicalView: cleanText(input.technicalView),
+    volumePriceView: cleanText(input.volumePriceView),
+    trendView: cleanText(input.trendView),
+    industry: cleanText(input.industry),
+    upstream: cleanText(input.upstream),
+    downstream: cleanText(input.downstream),
+    linkedIndicators: cleanText(input.linkedIndicators),
+    notes: cleanText(input.notes),
+    createdAt: existing.createdAt || now,
+    updatedAt: now
+  };
+}
+
+function normalizeEvidence(input, store) {
+  const kind = cleanText(input.kind);
+  if (!EVIDENCE_KINDS.has(kind)) throw new Error("证据类型必须是事实、分析或用户判断");
+  const title = cleanText(input.title);
+  const content = cleanText(input.content);
+  if (!title || !content) throw new Error("证据标题和内容必须填写");
+  const evidenceIds = Array.isArray(input.evidenceIds) ? [...new Set(input.evidenceIds.map(cleanText).filter(Boolean))] : [];
+  const unknownEvidence = evidenceIds.filter(id => !store.evidenceRecords.some(item => item.id === id));
+  if (unknownEvidence.length) throw new Error("分析引用了不存在的事实证据");
+  if (kind === "fact" && (!cleanText(input.source) || !cleanText(input.publishedAt))) {
+    throw new Error("事实卡必须填写来源和发布时间");
+  }
+  if (kind === "analysis" && !evidenceIds.length && cleanText(input.basis) !== "user_judgment") {
+    throw new Error("分析卡必须引用事实，或明确选择基于用户判断");
+  }
+  if (input.correctsId && !store.evidenceRecords.some(item => item.id === input.correctsId)) throw new Error("被更正的证据不存在");
+  const now = new Date().toISOString();
+  const record = {
+    id: `evidence-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    kind,
+    title,
+    content,
+    assetCode: cleanText(input.assetCode),
+    source: cleanText(input.source),
+    sourceUrl: cleanText(input.sourceUrl),
+    publishedAt: cleanText(input.publishedAt),
+    capturedAt: now,
+    evidenceIds,
+    basis: cleanText(input.basis),
+    confidence: cleanText(input.confidence || "medium"),
+    correctsId: cleanText(input.correctsId) || null,
+    createdAt: now
+  };
+  record.contentHash = contentHash(record);
+  return record;
+}
+
+function planRuleErrors(rule) {
+  const missing = [];
+  const requireText = (field, label) => { if (!cleanText(rule[field])) missing.push(label); };
+  requireText("direction", "方向");
+  requireText("triggerCondition", "触发条件");
+  requireText("allowedActions", "允许动作");
+  if (!Number.isFinite(Number(rule.maxPositionPct)) || Number(rule.maxPositionPct) <= 0) missing.push("最大仓位");
+  if (!Number.isFinite(Number(rule.maxRiskPct)) || Number(rule.maxRiskPct) <= 0) missing.push("单笔最大风险");
+  requireText("exitCondition", "退出条件");
+  requireText("forbidden", "禁止事项");
+  requireText("invalidationCondition", "失效条件");
+  requireText("defaultAction", "信息不足默认动作");
+  for (const [field, label] of [["baseScenario", "基准情景"], ["bullScenario", "乐观情景"], ["bearScenario", "悲观情景"]]) requireText(field, label);
+  return missing;
+}
+
+function validatePlanForConfirmation(plan) {
+  const errors = [];
+  if (!cleanText(plan.planForDate)) errors.push("适用交易日");
+  if (!cleanText(plan.validFrom)) errors.push("生效时间");
+  if (!cleanText(plan.validUntil)) errors.push("失效时间");
+  if (!cleanText(plan.accountRules)) errors.push("账户级限制");
+  if (!Array.isArray(plan.rules) || !plan.rules.length) errors.push("至少一个标的规则");
+  for (const rule of plan.rules || []) {
+    const missing = planRuleErrors(rule);
+    if (missing.length) errors.push(`${rule.name || rule.code || "标的"}：${missing.join("、")}`);
+  }
+  if (errors.length) throw new Error(`计划尚不能确认，缺少：${errors.join("；")}`);
 }
 
 function localDateKey(date = new Date()) {
@@ -369,11 +516,18 @@ function normalizeTrade(input) {
     price,
     fee: input.fee === "" || input.fee == null ? null : Number(input.fee),
     reason: String(input.reason || "").trim(),
+    ruleTrigger: String(input.ruleTrigger || "").trim(),
+    adjustmentReason: String(input.adjustmentReason || "").trim(),
     premarketPlanExists: Boolean(input.premarketPlanExists),
     planFollowed: Boolean(input.planFollowed ?? input.planBeforeTrade),
     planBeforeTrade: Boolean(input.premarketPlanExists),
     executionStatus: ["followed", "delayed", "unplanned"].includes(input.executionStatus) ? input.executionStatus : (input.planFollowed ? "followed" : "unplanned"),
     emotion: String(input.emotion || "").trim(),
+    planId: input.planId || null,
+    planVersion: input.planVersion == null ? null : Number(input.planVersion),
+    planSnapshotKey: input.planSnapshotKey || null,
+    planHash: input.planHash || null,
+    matchedRuleCode: input.matchedRuleCode || null,
     createdAt: new Date().toISOString()
   };
 }
@@ -497,6 +651,59 @@ function detectViolations(store, trade) {
     }
   }
   return flags;
+}
+
+function evaluateDiscipline(store, trade, plan, rule) {
+  const events = [];
+  const add = (code, severity, title, evidence, plannedValue = null, actualValue = null) => events.push({
+    id: `discipline-${Date.now()}-${events.length}-${Math.random().toString(16).slice(2)}`,
+    tradeId: trade.id,
+    date: trade.date,
+    assetCode: trade.code,
+    planId: plan?.id || null,
+    planVersion: plan?.version || null,
+    code,
+    severity,
+    title,
+    evidence,
+    plannedValue,
+    actualValue,
+    createdAt: new Date().toISOString()
+  });
+
+  if (!plan || !rule) {
+    add("NO_CONFIRMED_PLAN", "critical", "无计划新增风险", "成交发生时不存在覆盖该标的的已确认生效计划", "已确认计划", "无");
+  } else {
+    const allowed = cleanText(rule.allowedActions || `${rule.sell || ""} ${rule.stop || ""}`);
+    const permitted = trade.side === "BUY" ? /买|建仓|加仓|BUY/i.test(allowed) : /卖|减仓|退出|止损|SELL/i.test(allowed);
+    if (!permitted) add("ACTION_NOT_ALLOWED", "critical", "动作不在允许范围", `计划允许动作：${allowed || "未填写"}`, allowed || "未填写", trade.side);
+    if (trade.executionStatus === "unplanned" || !trade.planFollowed) {
+      add("PLAN_DEVIATION", "warning", "用户标记为偏离计划", cleanText(trade.adjustmentReason || trade.reason) || "未填写偏离理由");
+    }
+    if (!cleanText(trade.ruleTrigger)) add("TRIGGER_NOT_RECORDED", "warning", "未记录具体触发条件", "成交未绑定计划中的具体触发条件");
+
+    if (trade.side === "BUY" && Number(rule.maxPositionPct) > 0) {
+      const account = accountSummary(store);
+      const holding = store.holdings.find(item => item.code === trade.code);
+      const projectedValue = (Number(holding?.quantity || 0) + trade.quantity) * trade.price;
+      const projectedPct = account.totalAssets > 0 ? projectedValue / account.totalAssets * 100 : 100;
+      if (projectedPct > Number(rule.maxPositionPct) + 0.01) {
+        add("MAX_POSITION_EXCEEDED", "critical", "超过最大仓位", `预计仓位 ${projectedPct.toFixed(2)}%，计划上限 ${Number(rule.maxPositionPct).toFixed(2)}%`, `${rule.maxPositionPct}%`, `${projectedPct.toFixed(2)}%`);
+      }
+      if (Number(rule.stopPrice) > 0 && Number(rule.maxRiskPct) > 0 && account.totalAssets > 0) {
+        const riskPct = Math.max(0, trade.price - Number(rule.stopPrice)) * trade.quantity / account.totalAssets * 100;
+        if (riskPct > Number(rule.maxRiskPct) + 0.001) {
+          add("MAX_RISK_EXCEEDED", "critical", "超过单笔最大风险", `按止损价估算风险 ${riskPct.toFixed(2)}%，计划上限 ${Number(rule.maxRiskPct).toFixed(2)}%`, `${rule.maxRiskPct}%`, `${riskPct.toFixed(2)}%`);
+        }
+      }
+    }
+    if (trade.executionStatus === "delayed") add("DELAYED_EXECUTION", "warning", "触发后延迟执行", cleanText(trade.adjustmentReason || trade.reason) || "用户标记为延迟");
+  }
+
+  if (/怕踏空|赶紧买|追回|后悔|回本/.test(`${trade.reason} ${trade.emotion}`)) {
+    add("EMOTIONAL_TRADE", "warning", "疑似情绪驱动交易", `${trade.reason} ${trade.emotion}`.trim());
+  }
+  return events;
 }
 
 function validateTradeForPosting(store, trade) {
@@ -674,7 +881,7 @@ function selectedPlan(store, requestedDate) {
   const plans = [...store.plans].sort((a, b) => `${b.planForDate} ${b.updatedAt || b.createdAt}`.localeCompare(`${a.planForDate} ${a.updatedAt || a.createdAt}`));
   if (requestedDate) return plans.find(plan => plan.planForDate === requestedDate) || null;
   const today = localDateKey();
-  const todayPlan = plans.find(plan => plan.planForDate === today && ["active", "draft"].includes(plan.status));
+  const todayPlan = plans.find(plan => plan.planForDate === today && ["active", "confirmed", "pending_confirmation", "draft"].includes(plan.status));
   if (todayPlan) return todayPlan;
   const future = plans.filter(plan => plan.planForDate > today && plan.status !== "archived").sort((a, b) => a.planForDate.localeCompare(b.planForDate))[0];
   return future || plans[0] || null;
@@ -685,26 +892,70 @@ function upsertPlan(store, input) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(planForDate)) throw new Error("计划必须指定适用交易日");
   let plan = input.id ? store.plans.find(item => item.id === input.id) : store.plans.find(item => item.planForDate === planForDate && item.status !== "archived");
   const now = new Date().toISOString();
+  const previous = plan ? JSON.parse(JSON.stringify(plan)) : null;
   if (!plan) {
     plan = { id: `plan-${planForDate}-${Date.now()}`, planForDate, version: 1, createdAt: now };
     store.plans.push(plan);
   } else {
     plan.version = Number(plan.version || 0) + 1;
   }
+  let requestedStatus = cleanText(input.status || plan.status || "draft");
+  if (!PLAN_STATUSES.has(requestedStatus)) throw new Error("计划状态不合法");
+  if (previous && ["active", "confirmed"].includes(previous.status)) requestedStatus = "pending_confirmation";
+  const normalizedRules = (Array.isArray(input.rules) ? input.rules : []).map(rule => ({
+    code: cleanText(rule.code),
+    name: cleanText(rule.name),
+    direction: cleanText(rule.direction),
+    triggerCondition: cleanText(rule.triggerCondition || rule.wait),
+    allowedActions: cleanText(rule.allowedActions),
+    maxPositionPct: rule.maxPositionPct === "" || rule.maxPositionPct == null ? null : Number(rule.maxPositionPct),
+    maxRiskPct: rule.maxRiskPct === "" || rule.maxRiskPct == null ? null : Number(rule.maxRiskPct),
+    stopPrice: rule.stopPrice === "" || rule.stopPrice == null ? null : Number(rule.stopPrice),
+    reduceCondition: cleanText(rule.reduceCondition || rule.sell),
+    exitCondition: cleanText(rule.exitCondition || rule.stop),
+    forbidden: cleanText(rule.forbidden),
+    invalidationCondition: cleanText(rule.invalidationCondition),
+    defaultAction: cleanText(rule.defaultAction),
+    flexibleRange: cleanText(rule.flexibleRange),
+    baseScenario: cleanText(rule.baseScenario),
+    bullScenario: cleanText(rule.bullScenario),
+    bearScenario: cleanText(rule.bearScenario),
+    wait: cleanText(rule.triggerCondition || rule.wait),
+    sell: cleanText(rule.reduceCondition || rule.sell),
+    stop: cleanText(rule.exitCondition || rule.stop)
+  }));
   Object.assign(plan, {
     planForDate,
     sourceReviewDate: input.sourceReviewDate || plan.sourceReviewDate || null,
-    status: input.status || plan.status || "draft",
-    previousAdvice: String(input.previousAdvice || ""),
-    marketObservation: String(input.marketObservation || ""),
-    accountRules: String(input.accountRules || ""),
-    trainingFocus: String(input.trainingFocus || ""),
-    rules: Array.isArray(input.rules) ? input.rules : [],
+    planFormat: cleanText(input.planFormat || plan.planFormat || "legacy"),
+    status: requestedStatus,
+    validFrom: cleanText(input.validFrom || plan.validFrom || `${planForDate}T09:15`),
+    validUntil: cleanText(input.validUntil || plan.validUntil || `${planForDate}T15:30`),
+    expectedReturn: cleanText(input.expectedReturn),
+    userMarketView: cleanText(input.userMarketView),
+    systemMarketView: cleanText(input.systemMarketView),
+    previousAdvice: cleanText(input.previousAdvice),
+    marketObservation: cleanText(input.marketObservation),
+    accountRules: cleanText(input.accountRules),
+    trainingFocus: cleanText(input.trainingFocus),
+    changeReason: cleanText(input.changeReason),
+    evidenceIds: Array.isArray(input.evidenceIds) ? [...new Set(input.evidenceIds.map(cleanText).filter(Boolean))] : [],
+    rules: normalizedRules,
     generatedFromResearchId: input.generatedFromResearchId || plan.generatedFromResearchId || null,
     generationBasis: input.generationBasis || plan.generationBasis || null,
-    confirmedAt: input.status === "active" ? now : plan.confirmedAt || null,
+    confirmedAt: requestedStatus === "active" && !previous ? now : plan.confirmedAt || null,
     updatedAt: now
   });
+  plan.diffSummary = previous ? summarizePlanDiff(previous, plan) : ["新建计划"];
+  if (previous && plan.planFormat === "v0.3" && !cleanText(input.changeReason)) throw new Error("修改计划必须填写修改原因");
+  if (previous && !plan.changeReason) plan.changeReason = "旧版计划未要求填写修改原因";
+  if (previous && ["active", "confirmed"].includes(previous.status)) {
+    plan.previousConfirmationId = previous.confirmationId || null;
+    plan.confirmedAt = null;
+    plan.confirmationId = null;
+  }
+  plan.contentHash = contentHash(planContent(plan));
+  if (plan.planFormat === "v0.3" && requestedStatus === "active") validatePlanForConfirmation(plan);
   store.planVersions ||= [];
   const snapshotKey = `${plan.id}:v${plan.version}`;
   store.planVersions.push({
@@ -713,6 +964,46 @@ function upsertPlan(store, input) {
     snapshotId: `plan-version-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     savedAt: now
   });
+  return plan;
+}
+
+function confirmPlan(store, id, input) {
+  const plan = store.plans.find(item => item.id === id);
+  if (!plan) throw new Error("未找到待确认计划");
+  if (!["draft", "pending_confirmation", "confirmed"].includes(plan.status)) throw new Error("当前计划状态不能确认");
+  validatePlanForConfirmation(plan);
+  const reason = cleanText(input.reason);
+  if (!reason) throw new Error("确认计划必须填写确认说明");
+  const now = new Date().toISOString();
+  plan.contentHash = contentHash(planContent(plan));
+  const confirmation = {
+    id: `confirmation-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    planId: plan.id,
+    planVersion: plan.version,
+    planHash: plan.contentHash,
+    confirmedBy: "local-user",
+    method: "explicit-local-confirmation",
+    reason,
+    confirmedAt: now
+  };
+  store.planConfirmations.push(confirmation);
+  plan.status = "active";
+  plan.confirmedAt = now;
+  plan.confirmationId = confirmation.id;
+  plan.updatedAt = now;
+  return { plan, confirmation };
+}
+
+function invalidatePlan(store, id, input) {
+  const plan = store.plans.find(item => item.id === id);
+  if (!plan) throw new Error("未找到计划");
+  const reason = cleanText(input.reason);
+  if (!reason) throw new Error("计划失效必须填写原因");
+  const now = new Date().toISOString();
+  plan.status = "invalidated";
+  plan.invalidationReason = reason;
+  plan.invalidatedAt = now;
+  plan.updatedAt = now;
   return plan;
 }
 
@@ -954,6 +1245,10 @@ function buildReviewPacket(store) {
     holdings,
     recentTrades,
     recentOrders,
+    plannedAssets: (store.plannedAssets || []).filter(item => item.status !== "archived"),
+    recentEvidence: [...(store.evidenceRecords || [])].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100),
+    recentDisciplineEvents: [...(store.disciplineEvents || [])].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0, 100),
+    planConfirmations: [...(store.planConfirmations || [])].sort((a, b) => String(b.confirmedAt).localeCompare(String(a.confirmedAt))).slice(0, 30),
     latestStockPnlSnapshot: [...(store.stockPnlSnapshots || [])].sort((a, b) => String(b.asOfDate).localeCompare(String(a.asOfDate)))[0] || null,
     latestResearchSnapshot: [...(store.researchSnapshots || [])].sort((a, b) => String(b.reviewDate).localeCompare(String(a.reviewDate)))[0] || null,
     dailySession: store.dailySessions?.[today] || null,
@@ -1239,6 +1534,11 @@ const server = http.createServer(async (req, res) => {
         account: accountSummary(store),
         health: dataHealth(store),
         discipline: disciplineSummary(store, 7),
+        v03: {
+          plannedAssetCount: (store.plannedAssets || []).filter(item => item.status !== "archived").length,
+          evidenceCount: (store.evidenceRecords || []).length,
+          disciplineEventCount: (store.disciplineEvents || []).length
+        },
         ledger: { version: store.ledger?.version || null, establishedAt: store.ledger?.establishedAt || null, eventCount: store.ledger?.events?.length || 0, revision: store.__revision },
         plan: selectedPlan(store, url.searchParams.get("date")),
         nextTradingDate: nextTradingDate(new Date()),
@@ -1260,6 +1560,66 @@ const server = http.createServer(async (req, res) => {
       store.auditLog.push({ id: `audit-${Date.now()}`, type: "plan-saved", planId: plan.id, planForDate: plan.planForDate, version: plan.version, createdAt: new Date().toISOString() });
       saveStore(store, "plan");
       return json(res, 200, { plan, store });
+    }
+    const confirmPlanRoute = url.pathname.match(/^\/api\/plans\/([^/]+)\/confirm$/);
+    if (confirmPlanRoute && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const result = confirmPlan(store, decodeURIComponent(confirmPlanRoute[1]), body);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "plan-confirmed", planId: result.plan.id, version: result.plan.version, confirmationId: result.confirmation.id, createdAt: result.confirmation.confirmedAt });
+      saveStore(store, "plan-confirmed");
+      return json(res, 200, { ...result, store });
+    }
+    const invalidatePlanRoute = url.pathname.match(/^\/api\/plans\/([^/]+)\/invalidate$/);
+    if (invalidatePlanRoute && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const plan = invalidatePlan(store, decodeURIComponent(invalidatePlanRoute[1]), body);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "plan-invalidated", planId: plan.id, version: plan.version, reason: plan.invalidationReason, createdAt: plan.invalidatedAt });
+      saveStore(store, "plan-invalidated");
+      return json(res, 200, { plan, store });
+    }
+    if (url.pathname === "/api/planned-assets" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, { assets: [...store.plannedAssets].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))) });
+    }
+    if (url.pathname === "/api/planned-assets" && req.method === "PUT") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const existing = body.id ? store.plannedAssets.find(item => item.id === body.id) : store.plannedAssets.find(item => item.code === cleanText(body.code) && item.status !== "archived");
+      const asset = normalizePlannedAsset(body, existing || {});
+      if (existing) Object.assign(existing, asset);
+      else store.plannedAssets.push(asset);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "planned-asset-saved", assetId: asset.id, code: asset.code, createdAt: asset.updatedAt });
+      saveStore(store, "planned-asset");
+      return json(res, 200, { asset, store });
+    }
+    const plannedAssetRoute = url.pathname.match(/^\/api\/planned-assets\/([^/]+)$/);
+    if (plannedAssetRoute && req.method === "DELETE") {
+      const store = loadStore();
+      const asset = store.plannedAssets.find(item => item.id === decodeURIComponent(plannedAssetRoute[1]));
+      if (!asset) return json(res, 404, { error: "未找到计划标的" });
+      asset.status = "archived";
+      asset.archivedAt = new Date().toISOString();
+      asset.updatedAt = asset.archivedAt;
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "planned-asset-archived", assetId: asset.id, createdAt: asset.archivedAt });
+      saveStore(store, "planned-asset-archived");
+      return json(res, 200, { asset, store });
+    }
+    if (url.pathname === "/api/evidence" && req.method === "GET") {
+      const store = loadStore();
+      const assetCode = cleanText(url.searchParams.get("assetCode"));
+      const records = assetCode ? store.evidenceRecords.filter(item => item.assetCode === assetCode) : store.evidenceRecords;
+      return json(res, 200, { records: [...records].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) });
+    }
+    if (url.pathname === "/api/evidence" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const record = normalizeEvidence(body, store);
+      store.evidenceRecords.push(record);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "evidence-created", evidenceId: record.id, kind: record.kind, createdAt: record.createdAt });
+      saveStore(store, "evidence");
+      return json(res, 201, { record, store });
     }
     if (url.pathname === "/api/backups" && req.method === "GET") {
       return json(res, 200, { backups: listBackups() });
@@ -1393,16 +1753,25 @@ const server = http.createServer(async (req, res) => {
       const tradeDate = String(body.date || localDateKey());
       const applicablePlan = store.plans.find(plan => plan.planForDate === tradeDate && plan.status === "active");
       const plannedRules = applicablePlan?.rules || [];
-      body.premarketPlanExists = Boolean(applicablePlan && plannedRules.some(rule => String(rule.code) === String(body.code)));
+      const matchedRule = plannedRules.find(rule => String(rule.code) === String(body.code));
+      body.premarketPlanExists = Boolean(applicablePlan && matchedRule);
+      body.planId = applicablePlan?.id || null;
+      body.planVersion = applicablePlan?.version || null;
+      body.planSnapshotKey = applicablePlan ? `${applicablePlan.id}:v${applicablePlan.version}` : null;
+      body.planHash = applicablePlan?.contentHash || null;
+      body.matchedRuleCode = matchedRule?.code || null;
       const trade = normalizeTrade(body);
       validateTradeForPosting(store, trade);
-      trade.violations = detectViolations(store, trade);
+      const disciplineEvents = evaluateDiscipline(store, trade, applicablePlan, matchedRule);
+      trade.disciplineEventIds = disciplineEvents.map(item => item.id);
+      trade.violations = [...new Set([...detectViolations(store, trade), ...disciplineEvents.map(item => item.title)])];
       trade.accountApplied = true;
       store.trades.push(trade);
+      store.disciplineEvents.push(...disciplineEvents);
       appendTradeEvent(store, trade);
-      store.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-created", tradeId: trade.id, date: trade.date, createdAt: new Date().toISOString() });
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-created", tradeId: trade.id, date: trade.date, planId: trade.planId, planVersion: trade.planVersion, disciplineEventIds: trade.disciplineEventIds, createdAt: new Date().toISOString() });
       saveStore(store, "trade");
-      return json(res, 201, { trade, store });
+      return json(res, 201, { trade, disciplineEvents, store });
     }
     const feeRoute = url.pathname.match(/^\/api\/trades\/([^/]+)\/fee$/);
     if (feeRoute && req.method === "PUT") {

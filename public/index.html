@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
-      <h1>交易纪律助手 <span class="version-badge">v0.2</span></h1>
+      <h1>交易纪律助手 <span class="version-badge">v0.3</span></h1>
       <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
     </div>
     <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span></div>
@@ -19,6 +19,7 @@
 
   <nav class="nav" aria-label="主导航">
     <button class="nav-button active" data-page="overview">纪律驾驶舱</button>
+    <button class="nav-button" data-page="assets">计划标的与证据</button>
     <button class="nav-button" data-page="plan">下一交易日计划</button>
     <button class="nav-button" data-page="intraday">盘中行动卡</button>
     <button class="nav-button" data-page="postmarket">盘后核对与复盘</button>
@@ -44,6 +45,58 @@
       <section class="panel" id="weeklyDiscipline"></section>
     </section>
 
+    <section class="page" data-page-panel="assets">
+      <section class="page-heading"><div><p class="eyebrow">PLANNED ASSETS &amp; EVIDENCE</p><h2>计划标的与证据</h2><p class="muted">先研究，再计划。事实、分析与用户判断分别保存，不能互相冒充。</p></div><span class="quiet-badge">本地私密数据</span></section>
+      <div class="two-column asset-workspace">
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">WATCHLIST</p><h2>计划交易标的</h2></div></div>
+          <form id="plannedAssetForm">
+            <input name="id" type="hidden">
+            <div class="form-grid">
+              <label>股票代码<input name="code" inputmode="numeric" maxlength="6" required placeholder="000001"></label>
+              <label>股票名称<input name="name" required placeholder="输入证券名称"></label>
+              <label>状态<select name="status"><option value="watching">观察中</option><option value="researching">研究中</option><option value="planning">待计划</option><option value="planned">已有计划</option><option value="paused">暂停</option></select></label>
+              <label>行业<input name="industry" placeholder="所属行业"></label>
+            </div>
+            <label>预期收益（目标，不是承诺）<input name="expectedReturn" placeholder="例如：风险收益比达到 1:2 才考虑"></label>
+            <label>我的市场判断<textarea name="userMarketView" placeholder="记录主观判断，并与事实分开"></textarea></label>
+            <div class="form-grid">
+              <label>基本面<textarea name="fundamentalView"></textarea></label>
+              <label>技术面<textarea name="technicalView"></textarea></label>
+              <label>量价结构<textarea name="volumePriceView"></textarea></label>
+              <label>趋势判断<textarea name="trendView"></textarea></label>
+              <label>上游关联<textarea name="upstream"></textarea></label>
+              <label>下游关联<textarea name="downstream"></textarea></label>
+            </div>
+            <label>指数 / 商品 / 汇率 / 事件关联<input name="linkedIndicators"></label>
+            <button type="submit">保存计划标的</button><button id="clearPlannedAsset" type="button" class="secondary">新建</button><span id="plannedAssetMessage" class="form-message"></span>
+          </form>
+        </section>
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">EVIDENCE LAYER</p><h2>新增证据卡</h2></div></div>
+          <form id="evidenceForm">
+            <div class="form-grid">
+              <label>类型<select name="kind"><option value="fact">事实</option><option value="analysis">分析</option><option value="user_judgment">用户判断</option></select></label>
+              <label>关联标的<select name="assetCode" id="evidenceAssetCode"><option value="">整体市场 / 无特定标的</option></select></label>
+              <label>标题<input name="title" required></label>
+              <label>可信度<select name="confidence"><option value="high">高</option><option value="medium" selected>中</option><option value="low">低</option></select></label>
+            </div>
+            <label>内容<textarea name="content" required placeholder="事实只写可验证内容；分析写影响路径与不确定性"></textarea></label>
+            <div class="form-grid evidence-source-fields">
+              <label>来源<input name="source" placeholder="交易所 / 政府 / 公司官网"></label>
+              <label>发布时间<input name="publishedAt" type="datetime-local"></label>
+              <label>原文链接<input name="sourceUrl" type="url" placeholder="https://"></label>
+              <label>分析引用的事实<select name="evidenceId" id="evidenceReference"><option value="">未引用</option></select></label>
+              <label>无事实引用时的依据<select name="basis"><option value="">请选择</option><option value="user_judgment">基于用户判断</option></select></label>
+            </div>
+            <button type="submit">追加证据卡</button><span id="evidenceMessage" class="form-message"></span>
+          </form>
+        </section>
+      </div>
+      <section class="panel"><div class="panel-title"><div><p class="eyebrow">ASSET ARCHIVE</p><h2>标的档案</h2></div><span class="muted">可编辑或归档，不删除历史证据</span></div><div id="plannedAssetList" class="card-grid"></div></section>
+      <section class="panel"><div class="panel-title"><div><p class="eyebrow">TRACEABLE RECORDS</p><h2>事实、分析与判断记录</h2></div><span class="muted">新更正以新记录追加</span></div><div id="evidenceList" class="evidence-list"></div></section>
+    </section>
+
     <section class="page" data-page-panel="plan">
       <section class="page-heading">
         <div><p class="eyebrow">PLAN FOR A TRADING DAY</p><h2>下一交易日计划</h2><p class="muted">每份计划必须属于明确的交易日，并保留来源复盘和版本。</p></div>
@@ -56,18 +109,30 @@
           <div class="form-grid">
             <label>适用交易日<input id="planForDate" type="date" required></label>
             <label>来源复盘日期<input id="sourceReviewDate" type="date"></label>
-            <label>状态<select id="planStatus"><option value="draft">草稿</option><option value="active">确认生效</option><option value="completed">已完成</option></select></label>
+            <label>状态<select id="planStatus"><option value="draft">草稿</option><option value="pending_confirmation">待确认</option><option value="active" disabled>已确认生效</option><option value="invalidated" disabled>已失效</option><option value="completed">已完成</option></select></label>
             <label>版本<input id="planVersion" readonly></label>
+            <label>生效时间<input id="validFrom" type="datetime-local"></label>
+            <label>失效时间<input id="validUntil" type="datetime-local"></label>
           </div>
+          <label>预期收益（目标，不是系统承诺）<input id="expectedReturn" placeholder="例如：只在风险收益比不低于 1:2 时执行"></label>
+          <label>我的市场判断<textarea id="userMarketView" placeholder="主观判断单独记录"></textarea></label>
+          <label>系统市场整理<textarea id="systemMarketView" placeholder="仅整理可验证数据、风险与情景，不做确定性预测"></textarea></label>
           <label>上一轮复盘的核心提醒<textarea id="previousAdvice" placeholder="只保留会改变今天行为的提醒"></textarea></label>
           <label>账户级限制<textarea id="accountRules" placeholder="例如：今天最多两次卖出，不开新仓，累计亏损达到150元停止买入"></textarea></label>
           <label>唯一训练目标<input id="trainingFocus" placeholder="例如：触发止损后10分钟内执行"></label>
           <label>盘前环境核验<textarea id="marketObservation" placeholder="只记录是否出现足以使计划失效的新事实"></textarea></label>
+          <label>本次修改原因<input id="changeReason" placeholder="新建可写：首次制定；调整时必须说明新事实或风险变化"></label>
         </section>
         <section class="panel">
-          <div class="panel-title"><div><p class="eyebrow">ACTION RULES</p><h2>持仓行动条件</h2></div></div>
+          <div class="panel-title"><div><p class="eyebrow">ACTION RULES</p><h2>持仓与计划标的行动条件</h2></div></div>
           <div id="planRules"></div>
-          <button type="submit">保存计划</button>
+          <div class="form-grid plan-decision-fields">
+            <label>确认说明<input id="confirmationReason" placeholder="确认前说明已检查的风险边界与情景"></label>
+            <label>失效原因<input id="invalidationReason" placeholder="仅在标记失效时填写"></label>
+          </div>
+          <button type="submit">保存计划版本</button>
+          <button id="confirmPlan" type="button" class="secondary">明确确认并生效</button>
+          <button id="invalidatePlan" type="button" class="text-button">标记计划失效</button>
           <span id="planMessage" class="form-message"></span>
         </section>
       </form>
@@ -96,6 +161,8 @@
             <label>计划执行状态<select name="executionStatus"><option value="followed">按计划执行</option><option value="delayed">触发后延迟</option><option value="unplanned">计划外操作</option></select></label>
           </div>
           <label>当时的客观触发事实<textarea name="reason" required placeholder="哪条条件触发了？不要用结果解释决策"></textarea></label>
+          <label>对应计划触发条件<input name="ruleTrigger" placeholder="例如：悲观情景中跌破关键价且10分钟未收回"></label>
+          <label>偏离或临时调整原因<input name="adjustmentReason" placeholder="若未偏离可留空；超出容差必须说明依据"></label>
           <label>情绪备注<input name="emotion" placeholder="平静 / 犹豫 / 怕踏空 / 想回本"></label>
           <button type="submit">保存成交并检查纪律</button><span id="tradeMessage" class="form-message"></span>
         </form>

@@ -26,3 +26,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Generated PRD review artifacts and local document-build helpers
+docs/_qa*/
+docs/*.unscrubbed.docx
+docs/~$*.docx
+scripts/build_prd_docx.py
+scripts/rasterize_pdf_pages.py

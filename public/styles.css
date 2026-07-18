@@ -185,9 +185,29 @@ textarea{min-height:90px;resize:vertical}
 .stock-search-empty{padding:12px;color:var(--muted);font-size:12px}
 #tradeCode[readonly],#tradeName[readonly]{color:#b9c8da;background:#111a26;cursor:default}
 
+.asset-workspace{align-items:start}
+.card-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.asset-card,.evidence-card{border:1px solid var(--line);border-radius:13px;background:#0f1722;padding:15px;min-width:0}
+.asset-card p,.evidence-card p{overflow-wrap:anywhere}
+.card-actions{display:flex;gap:8px;margin-top:14px}
+.evidence-list{display:grid;gap:10px}
+.evidence-card a{color:var(--blue);font-size:12px;text-decoration:none}
+.evidence-card .tag.positive{border-color:rgba(56,189,148,.4);color:var(--green)}
+.evidence-card .tag.warning{border-color:rgba(244,183,64,.4);color:var(--amber)}
+.evidence-card .tag.info{border-color:rgba(86,174,255,.4);color:var(--blue)}
+.advanced-rule{margin-bottom:16px}
+.scenario-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px}
+.scenario-grid textarea{min-height:100px}
+.hash-line{font-family:"Cascadia Code",Consolas,monospace;font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+.plan-decision-fields{margin:16px 0 12px;padding-top:14px;border-top:1px solid var(--line)}
+#planForm button+button,#plannedAssetForm button+button{margin-left:8px}
+button:disabled{opacity:.45;cursor:not-allowed;filter:none}
+
 @media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}
 .two-column{grid-template-columns:1fr}
 .form-grid{grid-template-columns:repeat(2,1fr)}
+.card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.scenario-grid{grid-template-columns:1fr}
 .nav{justify-content:flex-start;overflow:auto}
 .trade-item{grid-template-columns:1fr}
 .close-grid{grid-template-columns:1fr}
@@ -201,6 +221,7 @@ textarea{min-height:90px;resize:vertical}
 @media(max-width:560px){main{padding:15px}
 .topbar{padding:20px 15px}
 .metrics,.form-grid,.rule-grid{grid-template-columns:1fr}
+.card-grid{grid-template-columns:1fr}
 .page-heading,.panel-title,.primary-cta{align-items:flex-start;flex-direction:column}
 .metric strong{font-size:21px}
 .analysis-record summary{align-items:flex-start;flex-direction:column}
