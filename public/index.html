@@ -11,10 +11,23 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
-      <h1>交易纪律助手 <span class="version-badge">v0.3.1</span></h1>
+      <h1>交易纪律助手 <span class="version-badge">v0.3.2</span></h1>
       <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
     </div>
-    <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span><button id="openOnboarding" class="text-button header-guide-button" type="button">使用向导</button></div>
+    <div class="header-status">
+      <span id="clock"></span>
+      <div class="header-tools">
+        <span id="saveStatus" class="status-dot">本地数据</span>
+        <button id="accountDetailsToggle" class="header-icon-button" type="button" aria-label="查看资产口径" title="查看资产口径">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7.5h16v11H4zM4 7.5 7 4h10l3 3.5M16 12h4M8 11h5M8 15h5"/></svg>
+        </button>
+        <button id="healthToggle" class="header-icon-button" type="button" aria-label="查看待处理数据" title="查看待处理数据">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6.5 10a5.5 5.5 0 0 1 11 0c0 5 2 5.5 2 7H4.5c0-1.5 2-2 2-7ZM10 20h4"/></svg>
+          <span id="healthAlertDot" class="header-alert-dot hidden" aria-hidden="true"></span>
+        </button>
+        <button id="openOnboarding" class="text-button header-guide-button" type="button">使用向导</button>
+      </div>
+    </div>
   </header>
 
   <nav class="nav" aria-label="主导航">
@@ -36,13 +49,10 @@
         <div class="panel-title"><div><p class="eyebrow">POSITIONS</p><h2>当前持仓</h2></div><span id="quoteTime" class="muted"></span></div>
         <div class="table-wrap"><table><thead><tr><th>股票</th><th>数量</th><th>成本</th><th>收盘/最新价</th><th>市值</th><th>持仓盈亏</th></tr></thead><tbody id="overviewHoldings"></tbody></table></div>
       </section>
-      <section class="panel hero-card" id="primaryAction"></section>
-      <section class="panel" id="dailyWorkflow"></section>
-      <div class="two-column">
+      <div class="dashboard-focus-grid">
+        <section class="panel" id="dailyWorkflow"></section>
         <section class="panel" id="activePlanSummary"></section>
-        <section class="panel" id="healthPanel"></section>
       </div>
-      <section class="panel" id="accountEquation"></section>
       <section class="panel" id="weeklyDiscipline"></section>
     </section>
 
@@ -295,6 +305,18 @@
   </main>
   <button id="scrollTopButton" class="scroll-top-button hidden" type="button" aria-label="一键置顶" title="返回顶部"><span aria-hidden="true">↑</span><span>置顶</span></button>
   <button id="taskStatusLauncher" class="task-launcher hidden" type="button">查看任务进度</button>
+  <div id="accountDetailsModal" class="utility-modal hidden" role="dialog" aria-modal="true" aria-labelledby="accountDetailsTitle">
+    <div class="utility-modal-card utility-modal-wide">
+      <div class="utility-modal-head"><h2 id="accountDetailsTitle">资产口径明细</h2><button class="text-button utility-modal-close" type="button" data-close-modal="accountDetailsModal">关闭</button></div>
+      <section id="accountEquation" class="utility-modal-content"></section>
+    </div>
+  </div>
+  <div id="healthModal" class="utility-modal hidden" role="dialog" aria-modal="true" aria-labelledby="healthModalTitle">
+    <div class="utility-modal-card">
+      <div class="utility-modal-head"><h2 id="healthModalTitle">数据健康提醒</h2><button class="text-button utility-modal-close" type="button" data-close-modal="healthModal">关闭</button></div>
+      <section id="healthPanel" class="utility-modal-content"></section>
+    </div>
+  </div>
   <div id="onboardingModal" class="onboarding-modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
     <div class="onboarding-card">
       <div class="task-modal-head"><div><p class="eyebrow">GET STARTED</p><h2 id="onboardingTitle">把现有数据接入新版流程</h2></div><button id="closeOnboarding" class="text-button" type="button">稍后再说</button></div>

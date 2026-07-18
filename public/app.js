@@ -242,12 +242,9 @@ function renderDashboard() {
   ].map(([label, value, cls]) => `<div class="metric"><span>${label}</span><strong class="${cls}">${value}</strong></div>`).join("");
 
   const issues = dashboard.health.issues;
-  const primary = issues.find(issue => issue.level === "error") || issues.find(issue => issue.type === "pending-fee") || issues[0];
-  const onboardingPending = dashboard.onboarding && !dashboard.onboarding.completed;
-  const workflowNext = dashboard.dailyWorkflow?.tasks?.find(item => !item.completed && !item.optional);
-  $("#primaryAction").innerHTML = onboardingPending
-    ? `<div class="primary-cta"><div><p class="eyebrow">START HERE</p><h2>先完成一次新版初始化</h2><p class="muted">已识别现有持仓、成交和旧计划；只需建立证据并确认一份新版计划。</p></div><button data-onboarding-open>打开使用向导</button></div>`
-    : `<div class="primary-cta"><div><p class="eyebrow">NEXT ACTION</p><h2>${primary ? escapeHtml(primary.message) : escapeHtml(workflowNext?.label || "当前任务已完成，按计划执行")}</h2><p class="muted">${primary ? "先处理影响账务或复盘可信度的数据。" : escapeHtml(workflowNext?.detail || planLabel(currentPlan))}</p></div><button data-jump="${primary ? "postmarket" : workflowNext?.page || "intraday"}">${primary ? "去处理" : "现在处理"}</button></div>`;
+  $("#healthAlertDot").classList.toggle("hidden", issues.length === 0);
+  $("#healthToggle").classList.toggle("has-alert", issues.length > 0);
+  $("#healthToggle").setAttribute("aria-label", issues.length ? `查看待处理数据，共 ${issues.length} 项` : "查看数据健康状态");
 
   const workflow = dashboard.dailyWorkflow || { tasks: [], completedCount: 0 };
   $("#dailyWorkflow").innerHTML = `<div class="panel-title"><div><p class="eyebrow">TODAY</p><h2>今天的闭环进度</h2></div><strong>${workflow.completedCount || 0} / ${workflow.tasks.length || 0}</strong></div><div class="daily-task-list">${workflow.tasks.map(item => `<button type="button" class="daily-task ${item.completed ? "done" : ""}" data-jump="${item.page}"><span class="task-check">${item.completed ? "✓" : ""}</span><span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></span><b>${item.optional ? "按需" : item.completed ? "已完成" : "去处理"}</b></button>`).join("")}</div>`;
@@ -267,6 +264,14 @@ function renderDashboard() {
     return `<tr><td><strong>${escapeHtml(holding.name)}</strong><br><span class="muted">${holding.code}</span></td><td>${holding.quantity}</td><td>${holding.cost.toFixed(3)}</td><td>${holding.lastPrice.toFixed(3)}</td><td>${money(marketValue)}</td><td class="${pnlTone(pnl)}">${money(pnl)}</td></tr>`;
   }).join("");
   $("#quoteTime").textContent = store.holdings.length ? `行情更新：${dateTime(store.holdings.map(h => h.quoteUpdatedAt).filter(Boolean).sort().pop())}` : "无持仓";
+}
+
+function openUtilityModal(id) {
+  $(`#${id}`).classList.remove("hidden");
+}
+
+function closeUtilityModal(id) {
+  $(`#${id}`).classList.add("hidden");
 }
 
 const PLAN_STEP_META = {
@@ -663,6 +668,16 @@ document.querySelectorAll(".nav-button").forEach(button => button.addEventListen
 document.querySelectorAll(".plan-step-button").forEach(button => button.addEventListener("click", () => advancePlanStep(Number(button.dataset.planStepTarget))));
 $("#planPrevStep").addEventListener("click", () => advancePlanStep(currentPlanStep - 1));
 $("#planNextStep").addEventListener("click", () => advancePlanStep(currentPlanStep + 1));
+$("#accountDetailsToggle").addEventListener("click", () => openUtilityModal("accountDetailsModal"));
+$("#healthToggle").addEventListener("click", () => openUtilityModal("healthModal"));
+document.querySelectorAll("[data-close-modal]").forEach(button => button.addEventListener("click", () => closeUtilityModal(button.dataset.closeModal)));
+document.querySelectorAll(".utility-modal").forEach(modal => modal.addEventListener("click", event => {
+  if (event.target === event.currentTarget) closeUtilityModal(modal.id);
+}));
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  document.querySelectorAll(".utility-modal:not(.hidden)").forEach(modal => closeUtilityModal(modal.id));
+});
 $("#openOnboarding").addEventListener("click", openOnboardingModal);
 $("#closeOnboarding").addEventListener("click", dismissOnboarding);
 $("#onboardingModal").addEventListener("click", event => { if (event.target === event.currentTarget) dismissOnboarding(); });
