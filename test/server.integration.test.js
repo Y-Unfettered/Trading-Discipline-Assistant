@@ -119,6 +119,16 @@ test("v0.2 API keeps plans, ledger, imports and latest review in one transaction
 
   assert.ok(fs.existsSync(path.join(dataDir, "trade-discipline.sqlite")));
   assert.ok(fs.existsSync(path.join(reportDir, "review-latest.json")));
+
+  result = await request(baseUrl, "/api/onboarding/upgrade-plan", { method: "POST", body: JSON.stringify({ planId }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.notEqual(result.payload.plan.id, planId);
+  assert.equal(result.payload.plan.planFormat, "v0.3");
+  assert.equal(result.payload.plan.status, "pending_confirmation");
+  assert.ok(!result.payload.plan.rules[0].allowedActions.includes("买入"));
+  const preservedLegacy = result.payload.store.plans.find(item => item.id === planId);
+  assert.equal(preservedLegacy.version, 2);
+  assert.notEqual(preservedLegacy.planFormat, "v0.3");
 });
 
 test("v0.3 keeps planned assets, evidence, confirmation and discipline events traceable", async t => {
@@ -146,6 +156,10 @@ test("v0.3 keeps planned assets, evidence, confirmation and discipline events tr
   const today = new Date().toISOString().slice(0, 10);
   let result = await request(baseUrl, "/api/account", { method: "PUT", body: JSON.stringify({ availableCash: 10000, brokerTotalAssets: "", todayPnl: "" }) });
   assert.equal(result.response.status, 200, stderr);
+
+  result = await request(baseUrl, "/api/onboarding/confirm-data", { method: "POST", body: "{}" });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.onboarding.steps.find(item => item.id === "data").completed, true);
 
   result = await request(baseUrl, "/api/planned-assets", { method: "PUT", body: JSON.stringify({
     code: "000001", name: "测试标的", status: "researching", industry: "测试行业", userMarketView: "只观察，不预测"
@@ -198,6 +212,21 @@ test("v0.3 keeps planned assets, evidence, confirmation and discipline events tr
   assert.equal(result.payload.trade.planId, planId);
   assert.equal(result.payload.trade.planVersion, 1);
   assert.ok(result.payload.disciplineEvents.some(item => item.code === "MAX_POSITION_EXCEEDED" && item.severity === "critical"));
+
+  result = await request(baseUrl, "/api/onboarding");
+  assert.equal(result.response.status, 200, stderr);
+  assert.ok(result.payload.steps.every(item => item.completed));
+  assert.equal(result.payload.completed, false);
+
+  result = await request(baseUrl, "/api/onboarding/complete", { method: "POST", body: "{}" });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.onboarding.completed, true);
+  assert.equal(result.payload.onboarding.shouldOpen, false);
+
+  result = await request(baseUrl, "/api/dashboard");
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.onboarding.completed, true);
+  assert.equal(result.payload.dailyWorkflow.tasks.length, 5);
 
   result = await request(baseUrl, "/api/plans", { method: "PUT", body: JSON.stringify({
     id: planId, planFormat: "v0.3", planForDate: today, status: "active", validFrom: `${today}T09:15`, validUntil: `${today}T15:30`,

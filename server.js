@@ -98,6 +98,11 @@ function migrateStore(store) {
   store.evidenceRecords ||= [];
   store.disciplineEvents ||= [];
   store.planConfirmations ||= [];
+  store.onboarding ||= {
+    version: "0.3.1",
+    completedAt: null,
+    dismissedAt: null
+  };
   store.ledgerBaseline ||= {
     establishedAt: new Date().toISOString(),
     availableCash: Number(store.account.availableCash || 0),
@@ -890,7 +895,11 @@ function selectedPlan(store, requestedDate) {
 function upsertPlan(store, input) {
   const planForDate = String(input.planForDate || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(planForDate)) throw new Error("计划必须指定适用交易日");
-  let plan = input.id ? store.plans.find(item => item.id === input.id) : store.plans.find(item => item.planForDate === planForDate && item.status !== "archived");
+  let plan = input.forceNew
+    ? null
+    : input.id
+      ? store.plans.find(item => item.id === input.id)
+      : store.plans.find(item => item.planForDate === planForDate && item.status !== "archived");
   const now = new Date().toISOString();
   const previous = plan ? JSON.parse(JSON.stringify(plan)) : null;
   if (!plan) {
@@ -1005,6 +1014,111 @@ function invalidatePlan(store, id, input) {
   plan.invalidatedAt = now;
   plan.updatedAt = now;
   return plan;
+}
+
+function onboardingSummary(store) {
+  const activeV03Plan = store.plans.find(plan => plan.planFormat === "v0.3" && plan.status === "active" && store.planConfirmations.some(item => item.planId === plan.id && Number(item.planVersion) === Number(plan.version)));
+  const legacyPlans = store.plans.filter(plan => plan.planFormat !== "v0.3" && !["completed", "archived", "invalidated"].includes(plan.status));
+  const upgradeSourcePlan = legacyPlans.sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0] || null;
+  const candidateAssets = store.plannedAssets.filter(item => item.status !== "archived");
+  const completed = Boolean(store.onboarding?.completedAt);
+  return {
+    version: "0.3.1",
+    completed,
+    dismissed: Boolean(store.onboarding?.dismissedAt),
+    shouldOpen: !completed && !store.onboarding?.dismissedAt,
+    counts: {
+      holdings: store.holdings.length,
+      trades: store.trades.length,
+      legacyPlans: legacyPlans.length,
+      candidateAssets: candidateAssets.length,
+      evidence: store.evidenceRecords.length,
+      confirmations: store.planConfirmations.length
+    },
+    steps: [
+      { id: "data", label: "确认现有数据", completed: Boolean(store.holdings.length || store.trades.length || store.onboarding?.dataConfirmedAt), page: "overview" },
+      { id: "assets", label: "整理交易标的", completed: Boolean(store.holdings.length || candidateAssets.length), page: "assets" },
+      { id: "evidence", label: "建立事实与判断", completed: store.evidenceRecords.length > 0, page: "assets" },
+      { id: "plan", label: "确认新版交易计划", completed: Boolean(activeV03Plan), page: "plan" }
+    ],
+    activeV03Plan: activeV03Plan ? { id: activeV03Plan.id, planForDate: activeV03Plan.planForDate, version: activeV03Plan.version } : null,
+    upgradeSource: upgradeSourcePlan ? { id: upgradeSourcePlan.id, planForDate: upgradeSourcePlan.planForDate, version: upgradeSourcePlan.version, status: upgradeSourcePlan.status } : null
+  };
+}
+
+function dailyWorkflow(store) {
+  const today = localDateKey();
+  const nextDate = nextTradingDate(new Date());
+  const todayTrades = store.trades.filter(item => item.date === today);
+  const review = store.dailySessions?.[today]?.postmarket;
+  const plan = store.plans.find(item => [today, nextDate].includes(item.planForDate) && item.status === "active" && item.planFormat === "v0.3");
+  const recentEvidence = store.evidenceRecords.filter(item => String(item.createdAt || "").slice(0, 10) === today);
+  const tasks = [
+    { id: "assets", label: "确认持仓与候选标的", detail: `${store.holdings.length} 个持仓 · ${store.plannedAssets.filter(item => item.status !== "archived").length} 个候选`, completed: store.holdings.length > 0, page: "assets" },
+    { id: "evidence", label: "补充影响计划的新事实", detail: recentEvidence.length ? `今天已新增 ${recentEvidence.length} 条` : `资料库共 ${store.evidenceRecords.length} 条，今天尚未新增`, completed: recentEvidence.length > 0, page: "assets" },
+    { id: "plan", label: "检查并确认交易计划", detail: plan ? `${plan.planForDate} · V${plan.version} 已生效` : "没有已确认的 v0.3 计划", completed: Boolean(plan), page: "plan" },
+    { id: "execution", label: "盘中成交后立即记录", detail: todayTrades.length ? `今天已记录 ${todayTrades.length} 笔` : "今天暂无成交记录", completed: todayTrades.length > 0, page: "intraday", optional: true },
+    { id: "review", label: "收盘后完成纪律复盘", detail: review?.completedAt ? "今日复盘已保存" : "今日复盘尚未完成", completed: Boolean(review?.completedAt), page: "postmarket" }
+  ];
+  return { date: today, nextTradingDate: nextDate, tasks, completedCount: tasks.filter(item => item.completed).length };
+}
+
+function upgradeLegacyPlan(store, input = {}) {
+  const onboarding = onboardingSummary(store);
+  const legacy = input.planId
+    ? store.plans.find(item => item.id === input.planId)
+    : store.plans.find(item => item.id === onboarding.upgradeSource?.id);
+  if (!legacy) throw new Error("没有可升级的旧版计划");
+  const today = localDateKey();
+  const planForDate = /^\d{4}-\d{2}-\d{2}$/.test(cleanText(input.planForDate))
+    ? cleanText(input.planForDate)
+    : legacy.planForDate >= today ? legacy.planForDate : nextTradingDate(new Date());
+  const account = accountSummary(store);
+  const legacyRules = Array.isArray(legacy.rules) && legacy.rules.length ? legacy.rules : store.holdings;
+  const rules = legacyRules.map(source => {
+    const holding = store.holdings.find(item => String(item.code) === String(source.code));
+    const currentPct = account.totalAssets > 0 && holding
+      ? holding.quantity * holding.lastPrice / account.totalAssets * 100
+      : 10;
+    return {
+      code: String(source.code),
+      name: source.name || holding?.name || String(source.code),
+      direction: holding ? "long" : "observe",
+      triggerCondition: source.triggerCondition || source.wait || "等待补充明确、可验证的触发条件",
+      allowedActions: holding ? "持有、减仓、退出" : "观察，不新增风险",
+      maxPositionPct: Math.min(100, Math.max(1, +currentPct.toFixed(2))),
+      maxRiskPct: Number(store.account.maxRiskPerTradePct || 0.8),
+      stopPrice: source.stopPrice || null,
+      reduceCondition: source.reduceCondition || source.sell || "等待补充减仓条件",
+      exitCondition: source.exitCondition || source.stop || "等待补充退出条件",
+      forbidden: source.forbidden || "不做计划外加仓；不因盘中急涨追买",
+      invalidationCondition: source.invalidationCondition || "出现未纳入计划的重大新事实，或关键数据失真",
+      defaultAction: source.defaultAction || "不新增风险，等待重新确认",
+      flexibleRange: source.flexibleRange || "仅允许不扩大风险的微调；扩大风险必须重新确认",
+      baseScenario: source.baseScenario || source.wait || "维持原计划，等待触发条件",
+      bullScenario: source.bullScenario || "不追涨；只有原计划条件满足时才执行",
+      bearScenario: source.bearScenario || source.stop || "不新增风险，优先执行退出和风险控制"
+    };
+  });
+  const plan = upsertPlan(store, {
+    forceNew: true,
+    planFormat: "v0.3",
+    planForDate,
+    sourceReviewDate: legacy.sourceReviewDate || null,
+    status: "pending_confirmation",
+    validFrom: `${planForDate}T09:15`,
+    validUntil: `${planForDate}T15:30`,
+    expectedReturn: legacy.expectedReturn || "不设置确定收益承诺；只执行风险收益条件",
+    userMarketView: legacy.userMarketView || "待用户补充",
+    systemMarketView: legacy.systemMarketView || legacy.marketObservation || "沿用旧计划环境记录，确认前需重新核验",
+    previousAdvice: legacy.previousAdvice || "沿用旧计划提醒",
+    accountRules: legacy.accountRules || "不新增计划外风险；达到当日风险上限后停止新增风险",
+    trainingFocus: legacy.trainingFocus || "只执行已确认条件",
+    marketObservation: legacy.marketObservation || "待盘前重新核验",
+    changeReason: "从 v0.2 计划安全升级为 v0.3.1 待确认草稿",
+    rules
+  });
+  return { plan, sourcePlanId: legacy.id };
 }
 
 function listBackups() {
@@ -1539,6 +1653,8 @@ const server = http.createServer(async (req, res) => {
           evidenceCount: (store.evidenceRecords || []).length,
           disciplineEventCount: (store.disciplineEvents || []).length
         },
+        onboarding: onboardingSummary(store),
+        dailyWorkflow: dailyWorkflow(store),
         ledger: { version: store.ledger?.version || null, establishedAt: store.ledger?.establishedAt || null, eventCount: store.ledger?.events?.length || 0, revision: store.__revision },
         plan: selectedPlan(store, url.searchParams.get("date")),
         nextTradingDate: nextTradingDate(new Date()),
@@ -1620,6 +1736,41 @@ const server = http.createServer(async (req, res) => {
       store.auditLog.push({ id: `audit-${Date.now()}`, type: "evidence-created", evidenceId: record.id, kind: record.kind, createdAt: record.createdAt });
       saveStore(store, "evidence");
       return json(res, 201, { record, store });
+    }
+    if (url.pathname === "/api/onboarding" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, onboardingSummary(store));
+    }
+    if (url.pathname === "/api/onboarding/upgrade-plan" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const result = upgradeLegacyPlan(store, body);
+      store.onboarding.dismissedAt = null;
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "legacy-plan-upgraded", sourcePlanId: result.sourcePlanId, planId: result.plan.id, createdAt: new Date().toISOString() });
+      saveStore(store, "onboarding-plan-upgrade");
+      return json(res, 200, { ...result, onboarding: onboardingSummary(store), store });
+    }
+    if (url.pathname === "/api/onboarding/complete" && req.method === "POST") {
+      const store = loadStore();
+      const summary = onboardingSummary(store);
+      if (!summary.steps.every(step => step.completed)) throw new Error("首次设置尚未完成，请先完成标的、证据和新版计划确认");
+      store.onboarding.completedAt = new Date().toISOString();
+      store.onboarding.dismissedAt = null;
+      saveStore(store, "onboarding-completed");
+      return json(res, 200, { onboarding: onboardingSummary(store), store });
+    }
+    if (url.pathname === "/api/onboarding/confirm-data" && req.method === "POST") {
+      const store = loadStore();
+      store.onboarding.dataConfirmedAt = new Date().toISOString();
+      store.onboarding.dismissedAt = null;
+      saveStore(store, "onboarding-data-confirmed");
+      return json(res, 200, { onboarding: onboardingSummary(store), store });
+    }
+    if (url.pathname === "/api/onboarding/dismiss" && req.method === "POST") {
+      const store = loadStore();
+      store.onboarding.dismissedAt = new Date().toISOString();
+      saveStore(store, "onboarding-dismissed");
+      return json(res, 200, { onboarding: onboardingSummary(store), store });
     }
     if (url.pathname === "/api/backups" && req.method === "GET") {
       return json(res, 200, { backups: listBackups() });

@@ -11,15 +11,15 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
-      <h1>交易纪律助手 <span class="version-badge">v0.3</span></h1>
+      <h1>交易纪律助手 <span class="version-badge">v0.3.1</span></h1>
       <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
     </div>
-    <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span></div>
+    <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span><button id="openOnboarding" class="text-button header-guide-button" type="button">使用向导</button></div>
   </header>
 
   <nav class="nav" aria-label="主导航">
     <button class="nav-button active" data-page="overview">纪律驾驶舱</button>
-    <button class="nav-button" data-page="assets">计划标的与证据</button>
+    <button class="nav-button" data-page="assets">交易标的中心</button>
     <button class="nav-button" data-page="plan">下一交易日计划</button>
     <button class="nav-button" data-page="intraday">盘中行动卡</button>
     <button class="nav-button" data-page="postmarket">盘后核对与复盘</button>
@@ -37,6 +37,7 @@
         <div class="table-wrap"><table><thead><tr><th>股票</th><th>数量</th><th>成本</th><th>收盘/最新价</th><th>市值</th><th>持仓盈亏</th></tr></thead><tbody id="overviewHoldings"></tbody></table></div>
       </section>
       <section class="panel hero-card" id="primaryAction"></section>
+      <section class="panel" id="dailyWorkflow"></section>
       <div class="two-column">
         <section class="panel" id="activePlanSummary"></section>
         <section class="panel" id="healthPanel"></section>
@@ -46,10 +47,11 @@
     </section>
 
     <section class="page" data-page-panel="assets">
-      <section class="page-heading"><div><p class="eyebrow">PLANNED ASSETS &amp; EVIDENCE</p><h2>计划标的与证据</h2><p class="muted">先研究，再计划。事实、分析与用户判断分别保存，不能互相冒充。</p></div><span class="quiet-badge">本地私密数据</span></section>
+      <section class="page-heading"><div><p class="eyebrow">ASSET CENTER &amp; EVIDENCE</p><h2>交易标的中心</h2><p class="muted">当前持仓自动出现；这里只需另外添加尚未持有、但准备研究的候选标的。</p></div><span class="quiet-badge">本地私密数据</span></section>
+      <div id="assetOverview" class="metrics compact-metrics"></div>
       <div class="two-column asset-workspace">
         <section class="panel">
-          <div class="panel-title"><div><p class="eyebrow">WATCHLIST</p><h2>计划交易标的</h2></div></div>
+          <div class="panel-title"><div><p class="eyebrow">CANDIDATE</p><h2>新增候选标的</h2></div><span class="muted">当前持仓不用重复录入</span></div>
           <form id="plannedAssetForm">
             <input name="id" type="hidden">
             <div class="form-grid">
@@ -69,7 +71,7 @@
               <label>下游关联<textarea name="downstream"></textarea></label>
             </div>
             <label>指数 / 商品 / 汇率 / 事件关联<input name="linkedIndicators"></label>
-            <button type="submit">保存计划标的</button><button id="clearPlannedAsset" type="button" class="secondary">新建</button><span id="plannedAssetMessage" class="form-message"></span>
+            <button type="submit">保存候选标的</button><button id="clearPlannedAsset" type="button" class="secondary">清空</button><span id="plannedAssetMessage" class="form-message"></span>
           </form>
         </section>
         <section class="panel">
@@ -93,7 +95,7 @@
           </form>
         </section>
       </div>
-      <section class="panel"><div class="panel-title"><div><p class="eyebrow">ASSET ARCHIVE</p><h2>标的档案</h2></div><span class="muted">可编辑或归档，不删除历史证据</span></div><div id="plannedAssetList" class="card-grid"></div></section>
+      <section class="panel"><div class="panel-title"><div><p class="eyebrow">UNIFIED ASSETS</p><h2>我的交易标的</h2></div><span class="muted">持仓与候选标的统一展示，状态清晰区分</span></div><div id="plannedAssetList" class="card-grid"></div></section>
       <section class="panel"><div class="panel-title"><div><p class="eyebrow">TRACEABLE RECORDS</p><h2>事实、分析与判断记录</h2></div><span class="muted">新更正以新记录追加</span></div><div id="evidenceList" class="evidence-list"></div></section>
     </section>
 
@@ -103,9 +105,16 @@
         <label class="date-picker">查看日期<input id="planDatePicker" type="date"></label>
       </section>
       <section class="panel plan-banner" id="planBanner"></section>
+      <section class="plan-wizard-nav" aria-label="计划制定步骤">
+        <button type="button" class="plan-step-button active" data-plan-step-target="1"><span>1</span>日期与总原则</button>
+        <button type="button" class="plan-step-button" data-plan-step-target="2"><span>2</span>动作与风险</button>
+        <button type="button" class="plan-step-button" data-plan-step-target="3"><span>3</span>三种情景</button>
+        <button type="button" class="plan-step-button" data-plan-step-target="4"><span>4</span>边界与确认</button>
+      </section>
+      <p id="planStepHelp" class="wizard-help"></p>
       <form id="planForm">
         <input id="planId" type="hidden">
-        <section class="panel">
+        <section class="panel" data-plan-step="1">
           <div class="form-grid">
             <label>适用交易日<input id="planForDate" type="date" required></label>
             <label>来源复盘日期<input id="sourceReviewDate" type="date"></label>
@@ -124,15 +133,18 @@
           <label>本次修改原因<input id="changeReason" placeholder="新建可写：首次制定；调整时必须说明新事实或风险变化"></label>
         </section>
         <section class="panel">
-          <div class="panel-title"><div><p class="eyebrow">ACTION RULES</p><h2>持仓与计划标的行动条件</h2></div></div>
+          <div class="panel-title"><div><p class="eyebrow">GUIDED PLAN</p><h2 id="planStepTitle">日期与总原则</h2></div><span id="planStepCounter" class="quiet-badge">第 1 / 4 步</span></div>
           <div id="planRules"></div>
-          <div class="form-grid plan-decision-fields">
-            <label>确认说明<input id="confirmationReason" placeholder="确认前说明已检查的风险边界与情景"></label>
-            <label>失效原因<input id="invalidationReason" placeholder="仅在标记失效时填写"></label>
+          <div data-plan-step="4">
+            <div class="form-grid plan-decision-fields">
+              <label>确认说明<input id="confirmationReason" placeholder="确认前说明已检查的风险边界与情景"></label>
+              <label>失效原因<input id="invalidationReason" placeholder="仅在标记失效时填写"></label>
+            </div>
+            <button type="submit">保存计划版本</button>
+            <button id="confirmPlan" type="button" class="secondary">明确确认并生效</button>
+            <button id="invalidatePlan" type="button" class="text-button">标记计划失效</button>
           </div>
-          <button type="submit">保存计划版本</button>
-          <button id="confirmPlan" type="button" class="secondary">明确确认并生效</button>
-          <button id="invalidatePlan" type="button" class="text-button">标记计划失效</button>
+          <div class="wizard-controls"><button id="planPrevStep" type="button" class="secondary">上一步</button><button id="planNextStep" type="button">下一步</button></div>
           <span id="planMessage" class="form-message"></span>
         </section>
       </form>
@@ -283,6 +295,16 @@
   </main>
   <button id="scrollTopButton" class="scroll-top-button hidden" type="button" aria-label="一键置顶" title="返回顶部"><span aria-hidden="true">↑</span><span>置顶</span></button>
   <button id="taskStatusLauncher" class="task-launcher hidden" type="button">查看任务进度</button>
+  <div id="onboardingModal" class="onboarding-modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingTitle">
+    <div class="onboarding-card">
+      <div class="task-modal-head"><div><p class="eyebrow">GET STARTED</p><h2 id="onboardingTitle">把现有数据接入新版流程</h2></div><button id="closeOnboarding" class="text-button" type="button">稍后再说</button></div>
+      <p class="muted">不会删除或上传任何数据。旧计划只会生成一个新的待确认草稿，必须由你检查后才能生效。</p>
+      <div id="onboardingDetected" class="onboarding-detected"></div>
+      <ol id="onboardingSteps" class="onboarding-steps"></ol>
+      <div id="onboardingAction" class="onboarding-action"></div>
+      <span id="onboardingMessage" class="form-message"></span>
+    </div>
+  </div>
   <div id="taskModal" class="task-modal hidden" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle">
     <div class="task-modal-card">
       <div class="task-modal-head"><div><p class="eyebrow">TASK STATUS</p><h2 id="taskModalTitle">正在处理</h2></div><button id="taskModalClose" class="text-button" type="button">隐藏窗口</button></div>

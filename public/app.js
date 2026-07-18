@@ -8,6 +8,8 @@ let taskModalRunning = false;
 let stockSearchTimer = null;
 let stockSearchRequest = 0;
 let stockSearchComposing = false;
+let currentPlanStep = 1;
+let onboardingAutoShown = false;
 
 const $ = selector => document.querySelector(selector);
 const money = value => `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -187,10 +189,13 @@ const assetStatusLabel = status => ({ watching: "观察中", researching: "研�
 const evidenceKindLabel = kind => ({ fact: "事实", analysis: "分析", user_judgment: "用户判断" }[kind] || kind);
 
 function planAssetUniverse() {
-  return [...new Map([
-    ...(store?.plannedAssets || []).filter(item => item.status !== "archived"),
-    ...(store?.holdings || [])
-  ].map(item => [String(item.code), item])).values()];
+  const map = new Map();
+  for (const holding of store?.holdings || []) map.set(String(holding.code), { ...holding, assetType: "holding", holding: true });
+  for (const candidate of (store?.plannedAssets || []).filter(item => item.status !== "archived")) {
+    const existing = map.get(String(candidate.code));
+    map.set(String(candidate.code), { ...(existing || {}), ...candidate, assetType: existing ? "holding" : "candidate", holding: Boolean(existing), candidateId: candidate.id, candidateStatus: candidate.status });
+  }
+  return [...map.values()];
 }
 
 function renderAssets() {
@@ -204,8 +209,20 @@ function renderAssets() {
   const currentReference = $("#evidenceReference").value;
   $("#evidenceReference").innerHTML = `<option value="">未引用</option>${evidence.filter(item => item.kind === "fact").map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")}`;
   if (evidence.some(item => item.id === currentReference)) $("#evidenceReference").value = currentReference;
+  $("#assetOverview").innerHTML = [
+    ["当前持仓", store.holdings.length],
+    ["候选标的", assets.length],
+    ["事实卡", evidence.filter(item => item.kind === "fact").length],
+    ["分析 / 判断", evidence.filter(item => item.kind !== "fact").length]
+  ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
 
-  $("#plannedAssetList").innerHTML = assets.length ? assets.map(asset => `<article class="asset-card" data-asset-id="${escapeHtml(asset.id)}"><div class="rule-title"><div><p class="eyebrow">${escapeHtml(asset.code)}</p><h3>${escapeHtml(asset.name)}</h3></div><span class="quiet-badge">${assetStatusLabel(asset.status)}</span></div><p>${escapeHtml(asset.userMarketView || "尚未填写市场判断")}</p><p class="muted">${escapeHtml([asset.industry, asset.upstream && `上游：${asset.upstream}`, asset.downstream && `下游：${asset.downstream}`].filter(Boolean).join(" · ") || "尚未建立产业关联")}</p><div class="card-actions"><button type="button" class="secondary edit-planned-asset" data-id="${escapeHtml(asset.id)}">编辑</button><button type="button" class="text-button archive-planned-asset" data-id="${escapeHtml(asset.id)}">归档</button></div></article>`).join("") : '<p class="muted">还没有计划交易标的。无持仓股票也可以先加入观察。</p>';
+  $("#plannedAssetList").innerHTML = universe.length ? universe.map(asset => {
+    const assetEvidence = evidence.filter(item => item.assetCode === String(asset.code));
+    const candidate = assets.find(item => String(item.code) === String(asset.code));
+    const typeLabel = asset.holding ? "当前持仓" : "候选标的";
+    const stateLabel = asset.holding ? (candidate ? `持仓 · ${assetStatusLabel(candidate.status)}` : "持仓中") : assetStatusLabel(asset.status);
+    return `<article class="asset-card ${asset.holding ? "holding-card" : "candidate-card"}" data-asset-code="${escapeHtml(asset.code)}"><div class="rule-title"><div><p class="eyebrow">${escapeHtml(asset.code)} · ${typeLabel}</p><h3>${escapeHtml(asset.name)}</h3></div><span class="quiet-badge">${escapeHtml(stateLabel)}</span></div><div class="asset-card-stats"><span>相关证据 <strong>${assetEvidence.length}</strong></span>${asset.holding ? `<span>当前数量 <strong>${Number(asset.quantity || 0)}</strong></span>` : ""}</div><p>${escapeHtml(candidate?.userMarketView || (asset.holding ? "已从当前持仓自动接入，不需要重复创建。" : "尚未填写市场判断"))}</p><div class="card-actions"><button type="button" class="secondary add-evidence-for-asset" data-code="${escapeHtml(asset.code)}">补充事实 / 判断</button><button type="button" class="secondary jump-plan-for-asset" data-code="${escapeHtml(asset.code)}">进入计划</button>${candidate ? `<button type="button" class="text-button edit-planned-asset" data-id="${escapeHtml(candidate.id)}">编辑候选</button><button type="button" class="text-button archive-planned-asset" data-id="${escapeHtml(candidate.id)}">归档</button>` : ""}</div></article>`;
+  }).join("") : '<div class="empty-state"><h3>还没有交易标的</h3><p>导入持仓后会自动出现；也可以在上方添加一个候选标的。</p></div>';
 
   $("#evidenceList").innerHTML = evidence.length ? evidence.slice(0, 80).map(item => {
     const tone = item.kind === "fact" ? "positive" : item.kind === "analysis" ? "warning" : "info";
@@ -226,7 +243,14 @@ function renderDashboard() {
 
   const issues = dashboard.health.issues;
   const primary = issues.find(issue => issue.level === "error") || issues.find(issue => issue.type === "pending-fee") || issues[0];
-  $("#primaryAction").innerHTML = `<div class="primary-cta"><div><p class="eyebrow">NEXT ACTION</p><h2>${primary ? escapeHtml(primary.message) : (currentPlan?.status === "draft" ? "确认下一交易日计划" : "当前数据完整，按计划执行")}</h2><p class="muted">${primary ? "先处理影响账务或复盘可信度的数据。" : planLabel(currentPlan)}</p></div><button data-jump="${primary ? "postmarket" : currentPlan?.status === "draft" ? "plan" : "intraday"}">${primary ? "去处理" : currentPlan?.status === "draft" ? "确认计划" : "打开行动卡"}</button></div>`;
+  const onboardingPending = dashboard.onboarding && !dashboard.onboarding.completed;
+  const workflowNext = dashboard.dailyWorkflow?.tasks?.find(item => !item.completed && !item.optional);
+  $("#primaryAction").innerHTML = onboardingPending
+    ? `<div class="primary-cta"><div><p class="eyebrow">START HERE</p><h2>先完成一次新版初始化</h2><p class="muted">已识别现有持仓、成交和旧计划；只需建立证据并确认一份新版计划。</p></div><button data-onboarding-open>打开使用向导</button></div>`
+    : `<div class="primary-cta"><div><p class="eyebrow">NEXT ACTION</p><h2>${primary ? escapeHtml(primary.message) : escapeHtml(workflowNext?.label || "当前任务已完成，按计划执行")}</h2><p class="muted">${primary ? "先处理影响账务或复盘可信度的数据。" : escapeHtml(workflowNext?.detail || planLabel(currentPlan))}</p></div><button data-jump="${primary ? "postmarket" : workflowNext?.page || "intraday"}">${primary ? "去处理" : "现在处理"}</button></div>`;
+
+  const workflow = dashboard.dailyWorkflow || { tasks: [], completedCount: 0 };
+  $("#dailyWorkflow").innerHTML = `<div class="panel-title"><div><p class="eyebrow">TODAY</p><h2>今天的闭环进度</h2></div><strong>${workflow.completedCount || 0} / ${workflow.tasks.length || 0}</strong></div><div class="daily-task-list">${workflow.tasks.map(item => `<button type="button" class="daily-task ${item.completed ? "done" : ""}" data-jump="${item.page}"><span class="task-check">${item.completed ? "✓" : ""}</span><span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></span><b>${item.optional ? "按需" : item.completed ? "已完成" : "去处理"}</b></button>`).join("")}</div>`;
 
   $("#activePlanSummary").innerHTML = `<div class="panel-title"><div><p class="eyebrow">ACTIVE PLAN</p><h2>当前计划</h2></div></div>${currentPlan ? `<h3>${planLabel(currentPlan)}</h3><p>${escapeHtml(currentPlan.trainingFocus || "尚未填写训练目标")}</p><p class="muted">来源复盘：${currentPlan.sourceReviewDate || "未关联"}</p>` : `<p class="warning">还没有下一交易日计划。</p>`}`;
   $("#healthPanel").innerHTML = `<div class="panel-title"><div><p class="eyebrow">DATA HEALTH</p><h2>待处理数据</h2></div><strong>${dashboard.health.score}分</strong></div><ul class="health-list">${issues.length ? issues.map(issue => `<li class="${issue.level === "error" ? "negative" : issue.level === "warning" ? "warning" : "info"}">${escapeHtml(issue.message)}</li>`).join("") : '<li class="positive">没有发现阻断复盘的问题</li>'}</ul>`;
@@ -243,6 +267,78 @@ function renderDashboard() {
     return `<tr><td><strong>${escapeHtml(holding.name)}</strong><br><span class="muted">${holding.code}</span></td><td>${holding.quantity}</td><td>${holding.cost.toFixed(3)}</td><td>${holding.lastPrice.toFixed(3)}</td><td>${money(marketValue)}</td><td class="${pnlTone(pnl)}">${money(pnl)}</td></tr>`;
   }).join("");
   $("#quoteTime").textContent = store.holdings.length ? `行情更新：${dateTime(store.holdings.map(h => h.quoteUpdatedAt).filter(Boolean).sort().pop())}` : "无持仓";
+}
+
+const PLAN_STEP_META = {
+  1: { title: "日期与总原则", help: "先确定计划适用于哪一天，以及账户层面的硬约束。这里不预测涨跌。" },
+  2: { title: "动作与风险", help: "逐个标的写清触发条件、允许动作、最大仓位和退出条件。没有条件，就没有动作。" },
+  3: { title: "三种情景", help: "分别写基准、乐观和悲观情景，用条件式应对替代确定性预测。" },
+  4: { title: "边界与确认", help: "最后检查禁止事项、失效条件和默认动作。保存后仍须明确确认才会生效。" }
+};
+
+function setPlanStep(step) {
+  currentPlanStep = Math.max(1, Math.min(4, Number(step) || 1));
+  document.querySelectorAll("[data-plan-step]").forEach(element => {
+    element.classList.toggle("hidden", Number(element.dataset.planStep) !== currentPlanStep);
+  });
+  document.querySelectorAll(".plan-step-button").forEach(button => {
+    const target = Number(button.dataset.planStepTarget);
+    button.classList.toggle("active", target === currentPlanStep);
+    button.classList.toggle("done", target < currentPlanStep);
+  });
+  const meta = PLAN_STEP_META[currentPlanStep];
+  $("#planStepTitle").textContent = meta.title;
+  $("#planStepCounter").textContent = `第 ${currentPlanStep} / 4 步`;
+  $("#planStepHelp").textContent = meta.help;
+  $("#planRules").classList.toggle("hidden", currentPlanStep === 1);
+  $("#planPrevStep").disabled = currentPlanStep === 1;
+  $("#planNextStep").classList.toggle("hidden", currentPlanStep === 4);
+}
+
+function planStepError(step) {
+  if (step === 1) {
+    const missing = [
+      ["#planForDate", "适用交易日"],
+      ["#validFrom", "生效时间"],
+      ["#validUntil", "失效时间"],
+      ["#accountRules", "账户级限制"]
+    ].filter(([selector]) => !$(selector).value.trim()).map(([, label]) => label);
+    if (missing.length) return `请先填写：${missing.join("、")}`;
+    if (new Date($("#validUntil").value) <= new Date($("#validFrom").value)) return "失效时间必须晚于生效时间";
+    return "";
+  }
+  const editors = [...document.querySelectorAll(".rule-editor")];
+  if (!editors.length) return "请先维护当前持仓或添加候选标的";
+  const requiredByStep = {
+    2: [["direction", "方向"], ["triggerCondition", "触发条件"], ["allowedActions", "允许动作"], ["maxPositionPct", "最大仓位"], ["maxRiskPct", "单笔最大风险"], ["exitCondition", "退出条件"]],
+    3: [["baseScenario", "基准情景"], ["bullScenario", "乐观情景"], ["bearScenario", "悲观情景"]],
+    4: [["forbidden", "禁止事项"], ["invalidationCondition", "计划失效条件"], ["defaultAction", "信息不足默认动作"]]
+  };
+  for (const editor of editors) {
+    const missing = requiredByStep[step].filter(([field]) => {
+      const input = editor.querySelector(`[data-field="${field}"]`);
+      if (!input?.value.trim()) return true;
+      if (["maxPositionPct", "maxRiskPct"].includes(field)) return !(Number(input.value) > 0);
+      return false;
+    }).map(([, label]) => label);
+    if (missing.length) return `${editor.dataset.ruleName || editor.dataset.ruleCode} 还缺少：${missing.join("、")}`;
+  }
+  return "";
+}
+
+function advancePlanStep(target) {
+  if (target > currentPlanStep) {
+    for (let step = currentPlanStep; step < target; step += 1) {
+      const error = planStepError(step);
+      if (error) {
+        setPlanStep(step);
+        return setMessage("#planMessage", error, "warning");
+      }
+    }
+  }
+  setMessage("#planMessage", "");
+  setPlanStep(target);
+  $("#planStepHelp").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderPlan(plan) {
@@ -273,7 +369,15 @@ function renderPlan(plan) {
     const holding = store.holdings.find(item => String(item.code) === String(asset.code));
     const rule = savedRules.find(item => String(item.code) === String(asset.code)) || {};
     const value = field => escapeHtml(rule[field] ?? "");
-    return `<div class="rule-editor advanced-rule" data-rule-code="${escapeHtml(asset.code)}" data-rule-name="${escapeHtml(asset.name)}"><div class="rule-title"><div><h3>${escapeHtml(asset.name)}</h3><span class="muted">${escapeHtml(asset.code)} · ${holding ? `当前持仓 ${holding.quantity}股` : `计划标的 · ${assetStatusLabel(asset.status)}`}</span></div><span class="quiet-badge">${holding ? "持仓" : "候选"}</span></div><div class="form-grid"><label>方向<select data-field="direction"><option value="">请选择</option><option value="long" ${rule.direction === "long" ? "selected" : ""}>做多 / 持有</option><option value="reduce" ${rule.direction === "reduce" ? "selected" : ""}>减仓 / 退出</option><option value="observe" ${rule.direction === "observe" ? "selected" : ""}>仅观察</option></select></label><label>允许动作<input data-field="allowedActions" value="${value("allowedActions")}" placeholder="买入 / 持有 / 减仓 / 退出"></label><label>最大仓位（%）<input data-field="maxPositionPct" type="number" min="0.01" max="100" step="0.01" value="${value("maxPositionPct")}"></label><label>单笔最大风险（%）<input data-field="maxRiskPct" type="number" min="0.01" max="100" step="0.01" value="${value("maxRiskPct")}"></label><label>风险估算止损价（可选）<input data-field="stopPrice" type="number" min="0" step="0.001" value="${value("stopPrice")}"></label><label>允许微调范围<input data-field="flexibleRange" value="${value("flexibleRange")}" placeholder="价格±0.5%，数量±100股"></label></div><div class="rule-grid"><label>触发条件<textarea data-field="triggerCondition">${value("triggerCondition") || value("wait")}</textarea></label><label>减仓条件<textarea data-field="reduceCondition">${value("reduceCondition") || value("sell")}</textarea></label><label>止损 / 退出条件<textarea data-field="exitCondition">${value("exitCondition") || value("stop")}</textarea></label><label>当日禁止事项<textarea data-field="forbidden">${value("forbidden") || "不做计划外加仓"}</textarea></label><label>计划失效条件<textarea data-field="invalidationCondition">${value("invalidationCondition")}</textarea></label><label>信息不足默认动作<textarea data-field="defaultAction">${value("defaultAction") || "不新增风险，等待确认"}</textarea></label></div><div class="scenario-grid"><label>基准情景<textarea data-field="baseScenario">${value("baseScenario")}</textarea></label><label>乐观情景<textarea data-field="bullScenario">${value("bullScenario")}</textarea></label><label>悲观情景<textarea data-field="bearScenario">${value("bearScenario")}</textarea></label></div></div>`;
+    return `<div class="rule-editor advanced-rule" data-rule-code="${escapeHtml(asset.code)}" data-rule-name="${escapeHtml(asset.name)}">
+      <div class="rule-title"><div><h3>${escapeHtml(asset.name)}</h3><span class="muted">${escapeHtml(asset.code)} · ${holding ? `当前持仓 ${holding.quantity}股` : `候选标的 · ${assetStatusLabel(asset.status)}`}</span></div><span class="quiet-badge">${holding ? "持仓" : "候选"}</span></div>
+      <div data-plan-step="2">
+        <div class="form-grid"><label>方向<select data-field="direction"><option value="">请选择</option><option value="long" ${rule.direction === "long" ? "selected" : ""}>做多 / 持有</option><option value="reduce" ${rule.direction === "reduce" ? "selected" : ""}>减仓 / 退出</option><option value="observe" ${rule.direction === "observe" ? "selected" : ""}>仅观察</option></select></label><label>允许动作<input data-field="allowedActions" value="${value("allowedActions")}" placeholder="买入 / 持有 / 减仓 / 退出"></label><label>最大仓位（%）<input data-field="maxPositionPct" type="number" min="0.01" max="100" step="0.01" value="${value("maxPositionPct")}"></label><label>单笔最大风险（%）<input data-field="maxRiskPct" type="number" min="0.01" max="100" step="0.01" value="${value("maxRiskPct")}"></label><label>风险估算止损价（可选）<input data-field="stopPrice" type="number" min="0" step="0.001" value="${value("stopPrice")}"></label></div>
+        <div class="rule-grid"><label>触发条件<textarea data-field="triggerCondition">${value("triggerCondition") || value("wait")}</textarea></label><label>减仓条件<textarea data-field="reduceCondition">${value("reduceCondition") || value("sell")}</textarea></label><label>止损 / 退出条件<textarea data-field="exitCondition">${value("exitCondition") || value("stop")}</textarea></label></div>
+      </div>
+      <div class="scenario-grid" data-plan-step="3"><label>基准情景<textarea data-field="baseScenario">${value("baseScenario")}</textarea></label><label>乐观情景<textarea data-field="bullScenario">${value("bullScenario")}</textarea></label><label>悲观情景<textarea data-field="bearScenario">${value("bearScenario")}</textarea></label></div>
+      <div class="rule-grid" data-plan-step="4"><label>当日禁止事项<textarea data-field="forbidden">${value("forbidden") || "不做计划外加仓"}</textarea></label><label>计划失效条件<textarea data-field="invalidationCondition">${value("invalidationCondition")}</textarea></label><label>信息不足默认动作<textarea data-field="defaultAction">${value("defaultAction") || "不新增风险，等待确认"}</textarea></label><label>允许微调范围<input data-field="flexibleRange" value="${value("flexibleRange")}" placeholder="价格±0.5%，数量±100股"></label></div>
+    </div>`;
   }).join("") : '<p class="warning">请先维护当前持仓或添加计划交易标的。</p>';
   const versions = [...(store.planVersions || [])].filter(item => item.id === plan?.id).sort((a, b) => Number(b.version) - Number(a.version));
   $("#planVersionHistory").innerHTML = versions.length ? versions.slice(0, 20).map(item => {
@@ -283,6 +387,7 @@ function renderPlan(plan) {
   }).join("") : '<p class="muted">首次保存后会在这里形成不可覆盖版本。</p>';
   $("#confirmPlan").disabled = !plan?.id || plan.status === "active" || ["invalidated", "completed"].includes(plan?.status);
   $("#invalidatePlan").disabled = !plan?.id || ["invalidated", "completed"].includes(plan?.status);
+  setPlanStep(currentPlanStep);
   renderIntraday();
 }
 
@@ -488,6 +593,40 @@ async function renderBackups() {
   $("#backupList").innerHTML = backups.slice(0, 30).map(item => `<div class="backup-item"><div><strong>${escapeHtml(item.name)}</strong><br><span class="muted">${dateTime(item.createdAt)} · ${item.summary ? `现金 ${money(item.summary.availableCash)} · 持仓 ${money(item.summary.marketValue)} · 总资产 ${money(item.summary.totalAssets)}` : "无法读取摘要"}</span></div><button class="secondary restore-backup" data-name="${escapeHtml(item.name)}">恢复到此版本</button></div>`).join("") || '<p class="muted">暂无备份。</p>';
 }
 
+function renderOnboarding() {
+  const onboarding = dashboard.onboarding;
+  if (!onboarding) return;
+  const counts = onboarding.counts;
+  $("#onboardingDetected").innerHTML = `<div class="detected-grid"><div><strong>${counts.holdings}</strong><span>当前持仓</span></div><div><strong>${counts.trades}</strong><span>历史成交</span></div><div><strong>${counts.legacyPlans}</strong><span>可升级旧计划</span></div><div><strong>${counts.evidence}</strong><span>新版证据</span></div></div>`;
+  $("#onboardingSteps").innerHTML = onboarding.steps.map(step => `<li class="${step.completed ? "done" : ""}"><span>${step.completed ? "✓" : ""}</span><div><strong>${escapeHtml(step.label)}</strong><small>${step.completed ? "已完成" : "尚未完成"}</small></div><button type="button" class="text-button onboarding-jump" data-page="${step.page}">${step.completed ? "查看" : "去完成"}</button></li>`).join("");
+  const nextStep = onboarding.steps.find(step => !step.completed);
+  if (onboarding.completed) {
+    $("#onboardingAction").innerHTML = '<p class="positive">首次设置已经完成。以后首页会直接告诉你当天下一步需要做什么。</p>';
+  } else if (nextStep?.id === "data") {
+    $("#onboardingAction").innerHTML = '<div><h3>先确认数据起点</h3><p class="muted">如果目前没有持仓和历史成交，可以确认空账户后继续；以后仍可随时录入或导入。</p></div><button id="confirmEmptyData" type="button">确认当前没有待导入数据</button>';
+  } else if (nextStep?.id === "plan" && onboarding.upgradeSource) {
+    $("#onboardingAction").innerHTML = `<div><h3>旧计划可以安全接入</h3><p class="muted">系统会保留旧版本，并生成 ${escapeHtml(onboarding.upgradeSource.planForDate)} 的新版待确认草稿。风险边界不会自动放宽。</p></div><button id="upgradeLegacyPlan" type="button">生成新版待确认草稿</button>`;
+  } else if (!nextStep) {
+    $("#onboardingAction").innerHTML = '<button id="completeOnboarding" type="button">完成首次设置</button>';
+  } else {
+    $("#onboardingAction").innerHTML = `<div><h3>下一步：${escapeHtml(nextStep.label)}</h3><p class="muted">完成这一项后，向导会自动推进。</p></div><button type="button" class="onboarding-jump" data-page="${nextStep.page}">现在去完成</button>`;
+  }
+}
+
+function openOnboardingModal() {
+  renderOnboarding();
+  $("#onboardingModal").classList.remove("hidden");
+}
+
+async function dismissOnboarding() {
+  $("#onboardingModal").classList.add("hidden");
+  try {
+    const result = await api("/api/onboarding/dismiss", { method: "POST", body: "{}" });
+    store = result.store;
+    dashboard.onboarding = result.onboarding;
+  } catch {}
+}
+
 function renderAll() {
   renderDashboard();
   renderAssets();
@@ -496,7 +635,9 @@ function renderAll() {
   renderTrades();
   renderFunds();
   renderStockPnl();
+  renderOnboarding();
   document.querySelectorAll("[data-jump]").forEach(button => button.onclick = () => switchPage(button.dataset.jump));
+  document.querySelectorAll("[data-onboarding-open]").forEach(button => button.onclick = openOnboardingModal);
 }
 
 async function reload() {
@@ -504,6 +645,10 @@ async function reload() {
   currentPlan = dashboard.plan;
   renderAll();
   renderAnalysisHistory();
+  if (dashboard.onboarding?.shouldOpen && !onboardingAutoShown) {
+    onboardingAutoShown = true;
+    openOnboardingModal();
+  }
 }
 
 function switchPage(page) {
@@ -515,6 +660,61 @@ function switchPage(page) {
 }
 
 document.querySelectorAll(".nav-button").forEach(button => button.addEventListener("click", () => switchPage(button.dataset.page)));
+document.querySelectorAll(".plan-step-button").forEach(button => button.addEventListener("click", () => advancePlanStep(Number(button.dataset.planStepTarget))));
+$("#planPrevStep").addEventListener("click", () => advancePlanStep(currentPlanStep - 1));
+$("#planNextStep").addEventListener("click", () => advancePlanStep(currentPlanStep + 1));
+$("#openOnboarding").addEventListener("click", openOnboardingModal);
+$("#closeOnboarding").addEventListener("click", dismissOnboarding);
+$("#onboardingModal").addEventListener("click", event => { if (event.target === event.currentTarget) dismissOnboarding(); });
+$("#onboardingModal").addEventListener("click", async event => {
+  const jump = event.target.closest(".onboarding-jump");
+  if (jump) {
+    $("#onboardingModal").classList.add("hidden");
+    switchPage(jump.dataset.page);
+    if (jump.dataset.page === "plan") setPlanStep(1);
+    return;
+  }
+  if (event.target.closest("#upgradeLegacyPlan")) {
+    const button = event.target.closest("#upgradeLegacyPlan");
+    button.disabled = true;
+    try {
+      const source = dashboard.onboarding?.upgradeSource;
+      const result = await api("/api/onboarding/upgrade-plan", { method: "POST", body: JSON.stringify({ planId: source?.id }) });
+      store = result.store;
+      currentPlan = result.plan;
+      dashboard = await api("/api/dashboard");
+      renderAll();
+      $("#onboardingModal").classList.add("hidden");
+      switchPage("plan");
+      setPlanStep(1);
+      setMessage("#planMessage", `已从旧计划生成 V${result.plan.version} 待确认草稿；请按四步检查后再确认`, "warning");
+    } catch (error) { setMessage("#onboardingMessage", error.message, "negative"); button.disabled = false; }
+    return;
+  }
+  if (event.target.closest("#completeOnboarding")) {
+    const button = event.target.closest("#completeOnboarding");
+    button.disabled = true;
+    try {
+      const result = await api("/api/onboarding/complete", { method: "POST", body: "{}" });
+      store = result.store;
+      dashboard.onboarding = result.onboarding;
+      $("#onboardingModal").classList.add("hidden");
+      renderAll();
+    } catch (error) { setMessage("#onboardingMessage", error.message, "negative"); button.disabled = false; }
+    return;
+  }
+  if (event.target.closest("#confirmEmptyData")) {
+    const button = event.target.closest("#confirmEmptyData");
+    button.disabled = true;
+    try {
+      const result = await api("/api/onboarding/confirm-data", { method: "POST", body: "{}" });
+      store = result.store;
+      dashboard.onboarding = result.onboarding;
+      renderOnboarding();
+      renderDashboard();
+    } catch (error) { setMessage("#onboardingMessage", error.message, "negative"); button.disabled = false; }
+  }
+});
 
 function resetPlannedAssetForm() {
   $("#plannedAssetForm").reset();
@@ -538,6 +738,19 @@ $("#clearPlannedAsset").addEventListener("click", resetPlannedAssetForm);
 $("#plannedAssetList").addEventListener("click", async event => {
   const editButton = event.target.closest(".edit-planned-asset");
   const archiveButton = event.target.closest(".archive-planned-asset");
+  const evidenceButton = event.target.closest(".add-evidence-for-asset");
+  const planButton = event.target.closest(".jump-plan-for-asset");
+  if (evidenceButton) {
+    $("#evidenceAssetCode").value = evidenceButton.dataset.code;
+    $("#evidenceForm").scrollIntoView({ behavior: "smooth", block: "start" });
+    $("#evidenceForm [name=title]").focus();
+  }
+  if (planButton) {
+    switchPage("plan");
+    setPlanStep(2);
+    const editor = document.querySelector(`.rule-editor[data-rule-code="${planButton.dataset.code}"]`);
+    editor?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
   if (editButton) {
     const asset = store.plannedAssets.find(item => item.id === editButton.dataset.id);
     if (!asset) return;
@@ -590,6 +803,14 @@ $("#planDatePicker").addEventListener("change", async event => {
 
 $("#planForm").addEventListener("submit", async event => {
   event.preventDefault();
+  for (let step = 1; step <= 4; step += 1) {
+    const error = planStepError(step);
+    if (error) {
+      setPlanStep(step);
+      setMessage("#planMessage", error, "warning");
+      return;
+    }
+  }
   const rules = [...document.querySelectorAll(".rule-editor")].map(editor => ({
     code: editor.dataset.ruleCode,
     name: editor.dataset.ruleName || planAssetUniverse().find(item => item.code === editor.dataset.ruleCode)?.name || editor.dataset.ruleCode,
