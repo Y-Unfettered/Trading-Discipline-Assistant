@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>交易纪律助手</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-header">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
+      <h1>交易纪律助手</h1>
+      <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
+    </div>
+    <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span></div>
+  </header>
+
+  <nav class="nav" aria-label="主导航">
+    <button class="nav-button active" data-page="overview">纪律驾驶舱</button>
+    <button class="nav-button" data-page="plan">下一交易日计划</button>
+    <button class="nav-button" data-page="intraday">盘中行动卡</button>
+    <button class="nav-button" data-page="postmarket">盘后核对与复盘</button>
+    <button class="nav-button" data-page="funds">资金轨迹</button>
+    <button class="nav-button" data-page="stock-pnl">个股盈亏</button>
+    <button class="nav-button" data-page="data">数据与恢复</button>
+  </nav>
+  </div>
+
+  <main>
+    <section class="page active" data-page-panel="overview">
+      <div id="assetMetrics" class="metrics"></div>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">POSITIONS</p><h2>当前持仓</h2></div><span id="quoteTime" class="muted"></span></div>
+        <div class="table-wrap"><table><thead><tr><th>股票</th><th>数量</th><th>成本</th><th>收盘/最新价</th><th>市值</th><th>持仓盈亏</th></tr></thead><tbody id="overviewHoldings"></tbody></table></div>
+      </section>
+      <section class="panel hero-card" id="primaryAction"></section>
+      <div class="two-column">
+        <section class="panel" id="activePlanSummary"></section>
+        <section class="panel" id="healthPanel"></section>
+      </div>
+      <section class="panel" id="accountEquation"></section>
+    </section>
+
+    <section class="page" data-page-panel="plan">
+      <section class="page-heading">
+        <div><p class="eyebrow">PLAN FOR A TRADING DAY</p><h2>下一交易日计划</h2><p class="muted">每份计划必须属于明确的交易日，并保留来源复盘和版本。</p></div>
+        <label class="date-picker">查看日期<input id="planDatePicker" type="date"></label>
+      </section>
+      <section class="panel plan-banner" id="planBanner"></section>
+      <form id="planForm">
+        <input id="planId" type="hidden">
+        <section class="panel">
+          <div class="form-grid">
+            <label>适用交易日<input id="planForDate" type="date" required></label>
+            <label>来源复盘日期<input id="sourceReviewDate" type="date"></label>
+            <label>状态<select id="planStatus"><option value="draft">草稿</option><option value="active">确认生效</option><option value="completed">已完成</option></select></label>
+            <label>版本<input id="planVersion" readonly></label>
+          </div>
+          <label>上一轮复盘的核心提醒<textarea id="previousAdvice" placeholder="只保留会改变今天行为的提醒"></textarea></label>
+          <label>账户级限制<textarea id="accountRules" placeholder="例如：今天最多两次卖出，不开新仓，累计亏损达到150元停止买入"></textarea></label>
+          <label>唯一训练目标<input id="trainingFocus" placeholder="例如：触发止损后10分钟内执行"></label>
+          <label>盘前环境核验<textarea id="marketObservation" placeholder="只记录是否出现足以使计划失效的新事实"></textarea></label>
+        </section>
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">ACTION RULES</p><h2>持仓行动条件</h2></div></div>
+          <div id="planRules"></div>
+          <button type="submit">保存计划</button>
+          <span id="planMessage" class="form-message"></span>
+        </section>
+      </form>
+    </section>
+
+    <section class="page" data-page-panel="intraday">
+      <section class="page-heading"><div><p class="eyebrow">EXECUTION ONLY</p><h2>盘中行动卡</h2><p id="intradayPlanMeta" class="muted"></p></div><span class="quiet-badge">默认不显示实时行情</span></section>
+      <section id="intradayCards" class="action-cards"></section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">QUICK TRADE LOG</p><h2>记录一笔实际成交</h2></div></div>
+        <form id="tradeForm">
+          <div class="form-grid">
+            <label>日期<input name="date" type="date" required></label>
+            <label>时间<input name="time" type="time" required></label>
+            <label>方向<select id="tradeSide" name="side"><option value="SELL">卖出</option><option value="BUY">买入</option></select></label>
+            <label id="tradeHoldingField">选择当前持仓<select id="tradeHoldingSelect"><option value="">请选择要卖出的股票</option></select></label>
+            <label id="tradeNameField">股票名称<div class="stock-picker"><input id="tradeName" name="name" autocomplete="off" required placeholder="输入股票名称，例如：贵州茅台"><div id="stockSearchResults" class="stock-search-results hidden" role="listbox"></div></div><small id="stockSearchHint" class="field-help">卖出时请从当前持仓选择</small></label>
+            <label>股票代码<input id="tradeCode" name="code" inputmode="numeric" maxlength="6" readonly required placeholder="选择股票后自动填写"></label>
+            <label>数量（股）<input name="quantity" type="number" min="1" step="1" required></label>
+            <label>成交价<input name="price" type="number" min="0.001" step="0.001" required></label>
+            <label>费用（可后补）<input name="fee" type="number" min="0" step="0.01"></label>
+            <label>计划执行状态<select name="executionStatus"><option value="followed">按计划执行</option><option value="delayed">触发后延迟</option><option value="unplanned">计划外操作</option></select></label>
+          </div>
+          <label>当时的客观触发事实<textarea name="reason" required placeholder="哪条条件触发了？不要用结果解释决策"></textarea></label>
+          <label>情绪备注<input name="emotion" placeholder="平静 / 犹豫 / 怕踏空 / 想回本"></label>
+          <button type="submit">保存成交并检查纪律</button><span id="tradeMessage" class="form-message"></span>
+        </form>
+      </section>
+    </section>
+
+    <section class="page" data-page-panel="postmarket">
+      <section class="page-heading"><div><p class="eyebrow">VERIFY BEFORE REVIEW</p><h2>盘后核对与复盘</h2><p class="muted">先把成交、费用、收盘价和账户口径核对清楚，再讨论决策。</p></div><button id="refreshClose" class="secondary">立即补跑收盘行情</button></section>
+      <section class="panel" id="closeStatusPanel"></section>
+      <section class="panel" id="pendingDataPanel"></section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">BROKER RECONCILIATION</p><h2>券商账户快照</h2></div></div>
+        <form id="snapshotForm">
+          <div class="form-grid">
+            <label>成交后毛现金（费用未出前）<input name="availableCash" type="number" step="0.01" required></label>
+            <label>券商显示总资产<input name="brokerTotalAssets" type="number" step="0.01"></label>
+            <label>今日盈亏<input name="todayPnl" type="number" step="0.01"></label>
+          </div>
+          <button type="submit" class="secondary">保存同一时点快照</button><span id="snapshotMessage" class="form-message"></span>
+        </form>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">SYSTEM FACTS</p><h2>系统已锁定的当日事实</h2></div><span class="muted">成交、收盘、账户和持仓自动汇总</span></div>
+        <div id="systemFactSummary"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">BEHAVIOR EVIDENCE</p><h2>只补充系统不知道的行为证据</h2></div><span class="muted">保存复盘不会自动生成计划</span></div>
+        <form id="postmarketForm">
+          <label>事实补充或更正<textarea id="postmarketNarrative" placeholder="只填写系统没有记录或记录错误的事实；不要重复抄成交和涨跌。"></textarea></label>
+          <label>执行证据：触发了哪条计划，实际是否按规则做？<textarea id="goodDecision" placeholder="例如：09:20触发反弹退出条件，卖出后没有追回。"></textarea></label>
+          <label>偏差与当时情境：哪一步偏离计划，为什么？<textarea id="badDecision" placeholder="记录怕踏空、怕卖飞、临时改价、等待更高点等当时可观察的行为。"></textarea></label>
+          <label>同类情境再次出现时的纠正规则<textarea id="tomorrowFocus" placeholder="写成可执行条件，例如：卖出后当天不追回；开盘前30分钟不临时改计划。" required></textarea></label>
+          <button type="submit">只保存复盘事实</button><span id="postmarketMessage" class="form-message"></span>
+        </form>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">RESEARCH BEFORE PLAN</p><h2>环境、持仓与情景研究</h2></div><div><button id="refreshResearchTechnicals" class="secondary">刷新均线数据</button> <button id="generateResearchPlan">基于研究生成计划草稿</button></div></div>
+        <p class="muted">技术数据由本地程序获取；政策、国际环境和公司资讯必须附来源并留存快照。只有研究数据完整后才生成计划。</p>
+        <div id="researchPanel"></div><span id="researchMessage" class="form-message"></span>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">CODEX REVIEW</p><h2>纪律分析与历史报告</h2></div><button id="exportReview" class="text-button">只生成复盘包</button></div>
+        <button id="runAnalysis">重新生成纪律分析</button>
+        <div id="analysisBox" class="analysis-box"><p class="muted">新分析会新增版本，不覆盖历史报告。</p></div>
+        <div id="analysisHistory" class="analysis-history"></div>
+      </section>
+    </section>
+
+    <section class="page" data-page-panel="funds">
+      <section class="page-heading"><div><p class="eyebrow">CAPITAL JOURNEY</p><h2>资金轨迹</h2><p class="muted">只使用券商资金流水、入出金和账户快照，不把成交额误当成新增资金。</p></div><span id="fundsAsOf" class="quiet-badge"></span></section>
+      <div id="fundMetrics" class="metrics"></div>
+      <div class="two-column">
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">CONTRIBUTIONS</p><h2>入金时间线</h2></div></div>
+          <div id="fundingTimeline" class="funding-timeline"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-title"><div><p class="eyebrow">CAPITAL BRIDGE</p><h2>投入与当前资产</h2></div></div>
+          <div id="fundingChart" class="capital-bars"></div>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">ACCOUNT SNAPSHOTS</p><h2>账户快照历史</h2></div><span class="muted">每日留存，便于回看和对账</span></div>
+        <div id="accountSnapshotHistory" class="table-wrap"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">BROKER CASH LEDGER</p><h2>年度资金明细</h2></div><span class="muted">成交、费用、入金和利息统一按发生时间查看</span></div>
+        <div id="brokerLedgerTable" class="table-wrap"></div>
+      </section>
+      <section class="panel" id="ledgerSummary"></section>
+    </section>
+
+    <section class="page" data-page-panel="stock-pnl">
+      <section class="page-heading"><div><p class="eyebrow">STOCK P&amp;L ARCHIVE</p><h2>个股盈亏档案</h2><p class="muted">以券商“开户以来收益明细”为主，保留每次快照及数据日期；当天尚未入账的数据单独列示，不覆盖历史真值。</p></div><span id="stockPnlAsOf" class="quiet-badge"></span></section>
+      <div id="stockPnlMetrics" class="metrics"></div>
+      <div class="two-column">
+        <section class="panel" id="stockPnlReconciliation"></section>
+        <section class="panel" id="stockPnlExtremes"></section>
+      </div>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">RANKING</p><h2>截至当前的个股累计盈亏</h2></div><span class="muted">按累计盈亏从高到低排列</span></div>
+        <div id="stockPnlTable" class="table-wrap"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">SNAPSHOT HISTORY</p><h2>个股盈亏快照历史</h2></div><span class="muted">原始快照与当日校正均留存</span></div>
+        <div id="stockPnlSnapshotHistory" class="table-wrap"></div>
+      </section>
+    </section>
+
+    <section class="page" data-page-panel="data">
+      <section class="page-heading"><div><p class="eyebrow">DATA & RECOVERY</p><h2>数据、导入与恢复</h2><p class="muted">每次写入前自动备份。恢复前先比较账户摘要。</p></div><button id="reloadBackups" class="secondary">刷新版本</button></section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">TRADES</p><h2>最近成交与费用</h2></div></div><div id="tradeList" class="trade-list"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">IMPORT</p><h2>导入券商成交 CSV</h2></div></div>
+        <p class="muted">缺少费用的成交应保留为待补录。导入前请确认是否同时更新账户与持仓。</p>
+        <input id="csvFile" type="file" accept=".csv,text/csv"><label class="check"><input id="updateHoldingsOnImport" type="checkbox"> 同时更新持仓</label><button id="importCsv" class="secondary">导入</button><span id="importMessage" class="form-message"></span>
+      </section>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">BACKUPS</p><h2>自动备份与恢复</h2></div><span class="muted">恢复动作也会留下新版本</span></div>
+        <div id="backupList" class="backup-list"></div>
+      </section>
+    </section>
+  </main>
+  <button id="scrollTopButton" class="scroll-top-button hidden" type="button" aria-label="一键置顶" title="返回顶部"><span aria-hidden="true">↑</span><span>置顶</span></button>
+  <button id="taskStatusLauncher" class="task-launcher hidden" type="button">查看任务进度</button>
+  <div id="taskModal" class="task-modal hidden" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle">
+    <div class="task-modal-card">
+      <div class="task-modal-head"><div><p class="eyebrow">TASK STATUS</p><h2 id="taskModalTitle">正在处理</h2></div><button id="taskModalClose" class="text-button" type="button">隐藏窗口</button></div>
+      <div class="task-state-row"><span id="taskModalSpinner" class="task-spinner" aria-hidden="true"></span><strong id="taskModalStatus">准备开始…</strong><span id="taskModalElapsed" class="muted">00:00</span></div>
+      <div class="task-progress" aria-label="任务进度"><div id="taskModalProgress" class="task-progress-fill" style="width:4%"></div></div>
+      <ol id="taskModalSteps" class="task-steps"></ol>
+      <pre id="taskModalDetails" class="task-details"></pre>
+      <p class="muted">可以隐藏窗口，任务会继续在后台执行；再次点击原按钮可重新查看当前状态。</p>
+    </div>
+  </div>
+  <script src="/vendor/marked.js"></script>
+  <script src="/vendor/purify.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

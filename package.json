@@ -1,0 +1,16 @@
+{
+  "name": "trade-discipline-journal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "本地交易日志、纪律检查与 Codex 复盘助手",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.2"
+  }
+}

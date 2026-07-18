@@ -1,0 +1,28 @@
+# Dependencies and runtime output
+node_modules/
+logs/
+*.log
+*.tmp
+
+# Personal trading data. Keep these files local only.
+data/
+reports/
+
+# One-off private migration/import scripts
+scripts/import-broker-*.js
+scripts/import-research-snapshot-*.js
+scripts/reclassify-analysis-timeout-*.js
+
+# Local agent and environment state
+.agents/
+.codex/
+.env
+.env.*
+!.env.example
+
+# Python/editor/OS artifacts
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+
