@@ -99,7 +99,7 @@ function migrateStore(store) {
   store.disciplineEvents ||= [];
   store.planConfirmations ||= [];
   store.onboarding ||= {
-    version: "0.3.2",
+    version: "0.3.3",
     completedAt: null,
     dismissedAt: null
   };
@@ -1023,7 +1023,7 @@ function onboardingSummary(store) {
   const candidateAssets = store.plannedAssets.filter(item => item.status !== "archived");
   const completed = Boolean(store.onboarding?.completedAt);
   return {
-    version: "0.3.2",
+    version: "0.3.3",
     completed,
     dismissed: Boolean(store.onboarding?.dismissedAt),
     shouldOpen: !completed && !store.onboarding?.dismissedAt,
@@ -1115,7 +1115,7 @@ function upgradeLegacyPlan(store, input = {}) {
     accountRules: legacy.accountRules || "不新增计划外风险；达到当日风险上限后停止新增风险",
     trainingFocus: legacy.trainingFocus || "只执行已确认条件",
     marketObservation: legacy.marketObservation || "待盘前重新核验",
-    changeReason: "从 v0.2 计划安全升级为 v0.3.2 待确认草稿",
+    changeReason: "从 v0.2 计划安全升级为 v0.3.3 待确认草稿",
     rules
   });
   return { plan, sourcePlanId: legacy.id };

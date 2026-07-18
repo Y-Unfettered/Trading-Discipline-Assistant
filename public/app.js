@@ -10,6 +10,9 @@ let stockSearchRequest = 0;
 let stockSearchComposing = false;
 let currentPlanStep = 1;
 let onboardingAutoShown = false;
+let workflowDragState = null;
+let workflowSuppressClick = false;
+let workflowMouseDragState = null;
 
 const $ = selector => document.querySelector(selector);
 const money = value => `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -235,8 +238,8 @@ function renderAssets() {
 function renderDashboard() {
   const account = dashboard.account;
   $("#assetMetrics").innerHTML = [
-    ["程序估算总资产", money(account.totalAssets), ""],
-    ["调整后现金", money(account.availableCash + account.pendingSettlementAdjustment), ""],
+    ["账户总资产", money(account.totalAssets), ""],
+    ["账户可用资金", money(account.availableCash + account.pendingSettlementAdjustment), ""],
     ["持仓市值", money(account.marketValue), ""],
     ["数据健康", `${dashboard.health.score}分`, dashboard.health.score >= 90 ? "positive" : "warning"]
   ].map(([label, value, cls]) => `<div class="metric"><span>${label}</span><strong class="${cls}">${value}</strong></div>`).join("");
@@ -247,9 +250,8 @@ function renderDashboard() {
   $("#healthToggle").setAttribute("aria-label", issues.length ? `查看待处理数据，共 ${issues.length} 项` : "查看数据健康状态");
 
   const workflow = dashboard.dailyWorkflow || { tasks: [], completedCount: 0 };
-  $("#dailyWorkflow").innerHTML = `<div class="panel-title"><div><p class="eyebrow">TODAY</p><h2>今天的闭环进度</h2></div><strong>${workflow.completedCount || 0} / ${workflow.tasks.length || 0}</strong></div><div class="daily-task-list">${workflow.tasks.map(item => `<button type="button" class="daily-task ${item.completed ? "done" : ""}" data-jump="${item.page}"><span class="task-check">${item.completed ? "✓" : ""}</span><span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></span><b>${item.optional ? "按需" : item.completed ? "已完成" : "去处理"}</b></button>`).join("")}</div>`;
-
-  $("#activePlanSummary").innerHTML = `<div class="panel-title"><div><p class="eyebrow">ACTIVE PLAN</p><h2>当前计划</h2></div></div>${currentPlan ? `<h3>${planLabel(currentPlan)}</h3><p>${escapeHtml(currentPlan.trainingFocus || "尚未填写训练目标")}</p><p class="muted">来源复盘：${currentPlan.sourceReviewDate || "未关联"}</p>` : `<p class="warning">还没有下一交易日计划。</p>`}`;
+  $("#workflowProgressBadge").textContent = `${workflow.completedCount || 0}/${workflow.tasks.length || 0}`;
+  $("#dailyWorkflow").innerHTML = `<div class="panel-title workflow-popover-title"><div><p class="eyebrow">TODAY</p><h2>今天的闭环进度</h2></div><div class="workflow-title-actions"><strong>${workflow.completedCount || 0} / ${workflow.tasks.length || 0}</strong><button id="closeWorkflowPanel" type="button" class="text-button">收起</button></div></div><div class="daily-task-list">${workflow.tasks.map(item => `<button type="button" class="daily-task ${item.completed ? "done" : ""}" data-jump="${item.page}"><span class="task-check">${item.completed ? "✓" : ""}</span><span><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></span><b>${item.optional ? "按需" : item.completed ? "已完成" : "去处理"}</b></button>`).join("")}</div>`;
   $("#healthPanel").innerHTML = `<div class="panel-title"><div><p class="eyebrow">DATA HEALTH</p><h2>待处理数据</h2></div><strong>${dashboard.health.score}分</strong></div><ul class="health-list">${issues.length ? issues.map(issue => `<li class="${issue.level === "error" ? "negative" : issue.level === "warning" ? "warning" : "info"}">${escapeHtml(issue.message)}</li>`).join("") : '<li class="positive">没有发现阻断复盘的问题</li>'}</ul>`;
 
   const brokerComparable = account.brokerSnapshotAt && (!account.latestTradeAt || new Date(account.brokerSnapshotAt) >= new Date(account.latestTradeAt));
@@ -272,6 +274,110 @@ function openUtilityModal(id) {
 
 function closeUtilityModal(id) {
   $(`#${id}`).classList.add("hidden");
+}
+
+const WORKFLOW_POSITION_KEY = "trade-discipline-workflow-position-v1";
+
+function setWorkflowOpen(open) {
+  $("#dailyWorkflow").classList.toggle("hidden", !open);
+  $("#workflowTomato").setAttribute("aria-expanded", String(open));
+  $("#workflowTomato").setAttribute("aria-label", open ? "收起今天的闭环进度" : "打开今天的闭环进度");
+  if (open) requestAnimationFrame(() => {
+    const widget = $("#dailyWorkflowWidget");
+    const rect = widget.getBoundingClientRect();
+    if (rect.left < 8) {
+      const currentRight = Number.parseFloat(widget.style.right || getComputedStyle(widget).right) || 22;
+      widget.style.right = `${Math.max(8, currentRight - (8 - rect.left))}px`;
+    }
+    if (rect.top < 8) {
+      const currentBottom = Number.parseFloat(widget.style.bottom || getComputedStyle(widget).bottom) || 142;
+      widget.style.bottom = `${Math.max(8, currentBottom - (8 - rect.top))}px`;
+    }
+  });
+}
+
+function restoreWorkflowPosition() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(WORKFLOW_POSITION_KEY) || "null");
+    if (!saved || !Number.isFinite(saved.right) || !Number.isFinite(saved.bottom)) return;
+    const widget = $("#dailyWorkflowWidget");
+    widget.style.right = `${Math.max(8, Math.min(window.innerWidth - 72, saved.right))}px`;
+    widget.style.bottom = `${Math.max(8, Math.min(window.innerHeight - 72, saved.bottom))}px`;
+    widget.style.top = "auto";
+  } catch {}
+}
+
+function beginWorkflowDrag(event) {
+  if (event.button !== 0) return;
+  const tomato = $("#workflowTomato");
+  const rect = tomato.getBoundingClientRect();
+  workflowDragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, tomatoLeft: rect.left, tomatoTop: rect.top, moved: false };
+  workflowSuppressClick = false;
+  tomato.setPointerCapture?.(event.pointerId);
+}
+
+function moveWorkflowDrag(event) {
+  if (!workflowDragState || workflowDragState.pointerId !== event.pointerId) return;
+  const dx = event.clientX - workflowDragState.startX;
+  const dy = event.clientY - workflowDragState.startY;
+  if (!workflowDragState.moved && Math.hypot(dx, dy) < 6) return;
+  workflowDragState.moved = true;
+  workflowSuppressClick = true;
+  const tomatoSize = 64;
+  const left = Math.max(8, Math.min(window.innerWidth - tomatoSize - 8, workflowDragState.tomatoLeft + dx));
+  const top = Math.max(8, Math.min(window.innerHeight - tomatoSize - 8, workflowDragState.tomatoTop + dy));
+  const widget = $("#dailyWorkflowWidget");
+  widget.style.right = `${window.innerWidth - left - tomatoSize}px`;
+  widget.style.bottom = `${window.innerHeight - top - tomatoSize}px`;
+  widget.style.top = "auto";
+  event.preventDefault();
+}
+
+function endWorkflowDrag(event) {
+  if (!workflowDragState || workflowDragState.pointerId !== event.pointerId) return;
+  if (workflowDragState.moved) {
+    const tomatoRect = $("#workflowTomato").getBoundingClientRect();
+    try {
+      localStorage.setItem(WORKFLOW_POSITION_KEY, JSON.stringify({ right: window.innerWidth - tomatoRect.right, bottom: window.innerHeight - tomatoRect.bottom }));
+    } catch {}
+    setTimeout(() => { workflowSuppressClick = false; }, 0);
+  }
+  workflowDragState = null;
+}
+
+function beginWorkflowMouseDrag(event) {
+  if (event.button !== 0) return;
+  const rect = $("#workflowTomato").getBoundingClientRect();
+  workflowMouseDragState = { startX: event.clientX, startY: event.clientY, tomatoLeft: rect.left, tomatoTop: rect.top, moved: false };
+}
+
+function moveWorkflowMouseDrag(event) {
+  if (!workflowMouseDragState) return;
+  const dx = event.clientX - workflowMouseDragState.startX;
+  const dy = event.clientY - workflowMouseDragState.startY;
+  if (!workflowMouseDragState.moved && Math.hypot(dx, dy) < 6) return;
+  workflowMouseDragState.moved = true;
+  workflowSuppressClick = true;
+  const tomatoSize = 64;
+  const left = Math.max(8, Math.min(window.innerWidth - tomatoSize - 8, workflowMouseDragState.tomatoLeft + dx));
+  const top = Math.max(8, Math.min(window.innerHeight - tomatoSize - 8, workflowMouseDragState.tomatoTop + dy));
+  const widget = $("#dailyWorkflowWidget");
+  widget.style.right = `${window.innerWidth - left - tomatoSize}px`;
+  widget.style.bottom = `${window.innerHeight - top - tomatoSize}px`;
+  widget.style.top = "auto";
+  event.preventDefault();
+}
+
+function endWorkflowMouseDrag() {
+  if (!workflowMouseDragState) return;
+  if (workflowMouseDragState.moved) {
+    const tomatoRect = $("#workflowTomato").getBoundingClientRect();
+    try {
+      localStorage.setItem(WORKFLOW_POSITION_KEY, JSON.stringify({ right: window.innerWidth - tomatoRect.right, bottom: window.innerHeight - tomatoRect.bottom }));
+    } catch {}
+    setTimeout(() => { workflowSuppressClick = false; }, 0);
+  }
+  workflowMouseDragState = null;
 }
 
 const PLAN_STEP_META = {
@@ -641,7 +747,10 @@ function renderAll() {
   renderFunds();
   renderStockPnl();
   renderOnboarding();
-  document.querySelectorAll("[data-jump]").forEach(button => button.onclick = () => switchPage(button.dataset.jump));
+  document.querySelectorAll("[data-jump]").forEach(button => button.onclick = () => {
+    switchPage(button.dataset.jump);
+    if (button.closest("#dailyWorkflow")) setWorkflowOpen(false);
+  });
   document.querySelectorAll("[data-onboarding-open]").forEach(button => button.onclick = openOnboardingModal);
 }
 
@@ -670,15 +779,31 @@ $("#planPrevStep").addEventListener("click", () => advancePlanStep(currentPlanSt
 $("#planNextStep").addEventListener("click", () => advancePlanStep(currentPlanStep + 1));
 $("#accountDetailsToggle").addEventListener("click", () => openUtilityModal("accountDetailsModal"));
 $("#healthToggle").addEventListener("click", () => openUtilityModal("healthModal"));
+$("#workflowTomato").addEventListener("click", () => {
+  if (workflowSuppressClick) return;
+  setWorkflowOpen($("#dailyWorkflow").classList.contains("hidden"));
+});
+$("#workflowTomato").addEventListener("pointerdown", beginWorkflowDrag);
+$("#workflowTomato").addEventListener("pointermove", moveWorkflowDrag);
+$("#workflowTomato").addEventListener("pointerup", endWorkflowDrag);
+$("#workflowTomato").addEventListener("pointercancel", endWorkflowDrag);
+$("#workflowTomato").addEventListener("mousedown", beginWorkflowMouseDrag);
+document.addEventListener("mousemove", moveWorkflowMouseDrag);
+document.addEventListener("mouseup", endWorkflowMouseDrag);
+$("#dailyWorkflowWidget").addEventListener("click", event => {
+  if (event.target.closest("#closeWorkflowPanel")) setWorkflowOpen(false);
+});
 document.querySelectorAll("[data-close-modal]").forEach(button => button.addEventListener("click", () => closeUtilityModal(button.dataset.closeModal)));
 document.querySelectorAll(".utility-modal").forEach(modal => modal.addEventListener("click", event => {
   if (event.target === event.currentTarget) closeUtilityModal(modal.id);
 }));
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
+  setWorkflowOpen(false);
   document.querySelectorAll(".utility-modal:not(.hidden)").forEach(modal => closeUtilityModal(modal.id));
 });
 $("#openOnboarding").addEventListener("click", openOnboardingModal);
+restoreWorkflowPosition();
 $("#closeOnboarding").addEventListener("click", dismissOnboarding);
 $("#onboardingModal").addEventListener("click", event => { if (event.target === event.currentTarget) dismissOnboarding(); });
 $("#onboardingModal").addEventListener("click", async event => {

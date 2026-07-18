@@ -42,8 +42,6 @@ main{max-width:1240px;margin:auto;padding:24px}
 .metric strong{font-size:24px}
 .two-column{display:grid;grid-template-columns:1.2fr .8fr;gap:18px}
 .two-column>.panel{min-width:0}
-.dashboard-focus-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:stretch;margin-bottom: 18px}
-.dashboard-focus-grid>.panel{min-width:0;height:100%}
 .positive{color:var(--green)}
 .negative{color:var(--red)}
 .pnl-profit,.trade-buy{color:var(--red)}
@@ -107,6 +105,19 @@ textarea{min-height:90px;resize:vertical}
 .daily-task.done b{color:var(--green)}
 .task-check{display:grid;place-items:center;width:25px;height:25px;border:1px solid #45617f;border-radius:50%;color:var(--green);font-weight:900}
 .daily-task.done .task-check{border-color:var(--green);background:rgba(85,214,163,.1)}
+.workflow-widget{position:fixed;right:22px;bottom:142px;z-index:100;display:flex;align-items:flex-end;gap:12px;max-width:calc(100vw - 24px)}
+.workflow-tomato{position:relative;flex:0 0 64px;width:64px;height:64px;padding:0;border:1px solid rgba(255,126,136,.7);border-radius:50%;background:#182330;color:var(--text);box-shadow:0 15px 38px rgba(0,0,0,.45);touch-action:none;cursor:grab;user-select:none}
+.workflow-tomato:active{cursor:grabbing}
+.workflow-tomato:hover{filter:none;transform:translateY(-2px);box-shadow:0 18px 42px rgba(0,0,0,.5)}
+.workflow-tomato svg{width:54px;height:54px;display:block;margin:auto;overflow:visible;filter:drop-shadow(0 4px 5px rgba(0,0,0,.28))}
+.tomato-body{fill:#ef5362;stroke:#ff929a;stroke-width:1.5}
+.tomato-leaf{fill:#55d6a3;stroke:#96e9c7;stroke-width:1.2;stroke-linejoin:round}
+.tomato-shine{fill:none;stroke:#ffc0c5;stroke-width:3;stroke-linecap:round;opacity:.85}
+.workflow-progress-badge{position:absolute;right:-5px;bottom:-3px;display:grid;place-items:center;min-width:28px;height:22px;padding:0 5px;border:2px solid var(--bg);border-radius:99px;background:#f6c96b;color:#161006;font-size:10px;font-weight:900}
+.workflow-popover{width:min(430px,calc(100vw - 100px));max-height:min(650px,calc(100vh - 48px));overflow:auto;padding:18px;border:1px solid #3e5c7b;border-radius:17px;background:linear-gradient(145deg,#19283a,#101824);box-shadow:0 24px 70px rgba(0,0,0,.5)}
+.workflow-popover-title{position:sticky;top:-18px;z-index:2;margin:-18px -18px 8px;padding:18px;background:rgba(21,33,48,.97);border-bottom:1px solid var(--line);backdrop-filter:blur(8px)}
+.workflow-title-actions{display:flex;align-items:center;gap:10px}
+.workflow-title-actions .text-button{font-size:12px}
 .close-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .close-cell{background:#0f1722;border-radius:10px;padding:12px}
 .close-cell span{display:block;color:var(--muted);font-size:12px}
@@ -267,7 +278,6 @@ button:disabled{opacity:.45;cursor:not-allowed;filter:none}
 
 @media(max-width:900px){.metrics{grid-template-columns:repeat(2,1fr)}
 .two-column{grid-template-columns:1fr}
-.dashboard-focus-grid{grid-template-columns:1fr}
 .form-grid{grid-template-columns:repeat(2,1fr)}
 .card-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .plan-wizard-nav{grid-template-columns:repeat(2,1fr)}
@@ -302,4 +312,7 @@ button:disabled{opacity:.45;cursor:not-allowed;filter:none}
 .analysis-record summary{align-items:flex-start;flex-direction:column}
 .task-launcher{right:15px;bottom:15px}
 .scroll-top-button{right:15px;bottom:75px}
+.workflow-widget{right:15px;bottom:136px}
+.workflow-popover{width:calc(100vw - 94px);padding:14px}
+.workflow-popover-title{top:-14px;margin:-14px -14px 8px;padding:14px}
 }

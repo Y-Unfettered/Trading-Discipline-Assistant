@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
-      <h1>交易纪律助手 <span class="version-badge">v0.3.2</span></h1>
+      <h1>交易纪律助手 <span class="version-badge">v0.3.3</span></h1>
       <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
     </div>
     <div class="header-status">
@@ -49,10 +49,6 @@
         <div class="panel-title"><div><p class="eyebrow">POSITIONS</p><h2>当前持仓</h2></div><span id="quoteTime" class="muted"></span></div>
         <div class="table-wrap"><table><thead><tr><th>股票</th><th>数量</th><th>成本</th><th>收盘/最新价</th><th>市值</th><th>持仓盈亏</th></tr></thead><tbody id="overviewHoldings"></tbody></table></div>
       </section>
-      <div class="dashboard-focus-grid">
-        <section class="panel" id="dailyWorkflow"></section>
-        <section class="panel" id="activePlanSummary"></section>
-      </div>
       <section class="panel" id="weeklyDiscipline"></section>
     </section>
 
@@ -303,6 +299,17 @@
       </section>
     </section>
   </main>
+  <aside id="dailyWorkflowWidget" class="workflow-widget" aria-label="今日闭环助手">
+    <section id="dailyWorkflow" class="workflow-popover hidden" aria-label="今天的闭环进度"></section>
+    <button id="workflowTomato" class="workflow-tomato" type="button" aria-label="打开今天的闭环进度" aria-expanded="false" title="点击查看今日闭环；拖动可移动">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <path class="tomato-leaf" d="M32 15c-7-8-15-7-20-4 5 1 8 5 10 9-7-2-13 1-16 5 6-1 10 1 14 5h24c4-4 8-6 14-5-3-4-9-7-16-5 2-4 5-8 10-9-5-3-13-4-20 4Z"/>
+        <path class="tomato-body" d="M53 34c0 14-9 24-21 24S11 48 11 34c0-10 8-17 21-17s21 7 21 17Z"/>
+        <path class="tomato-shine" d="M20 31c2-5 6-8 11-9"/>
+      </svg>
+      <span id="workflowProgressBadge" class="workflow-progress-badge">0/5</span>
+    </button>
+  </aside>
   <button id="scrollTopButton" class="scroll-top-button hidden" type="button" aria-label="一键置顶" title="返回顶部"><span aria-hidden="true">↑</span><span>置顶</span></button>
   <button id="taskStatusLauncher" class="task-launcher hidden" type="button">查看任务进度</button>
   <div id="accountDetailsModal" class="utility-modal hidden" role="dialog" aria-modal="true" aria-labelledby="accountDetailsTitle">

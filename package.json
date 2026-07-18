@@ -1,6 +1,6 @@
 {
   "name": "trade-discipline-journal",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "本地部署的个人交易计划、证据、执行与纪律复盘助手",
   "scripts": {
