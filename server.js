@@ -2,14 +2,24 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { DatabaseSync } = require("node:sqlite");
+const {
+  appendCashReconciliationEvent,
+  appendFeeAdjustmentEvent,
+  appendPositionReconciliationEvent,
+  appendTradeEvent,
+  ensureLedger,
+  rebuildLedgerProjection
+} = require("./lib/ledger");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = process.env.TRADE_DATA_DIR ? path.resolve(process.env.TRADE_DATA_DIR) : path.join(ROOT, "data");
 const STORE_FILE = path.join(DATA_DIR, "store.json");
+const DATABASE_FILE = path.join(DATA_DIR, "trade-discipline.sqlite");
 const STOCK_CACHE_FILE = path.join(DATA_DIR, "stocks.json");
 const A_SHARE_STOCKS_FILE = path.join(DATA_DIR, "a-share-stocks.json");
-const REPORT_DIR = path.join(ROOT, "reports");
+const REPORT_DIR = process.env.TRADE_REPORT_DIR ? path.resolve(process.env.TRADE_REPORT_DIR) : path.join(ROOT, "reports");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const VENDOR_FILES = {
   "/vendor/marked.js": path.join(ROOT, "node_modules", "marked", "lib", "marked.umd.js"),
@@ -70,7 +80,7 @@ function nextTradingDate(fromDate = new Date()) {
 }
 
 function migrateStore(store) {
-  store.schemaVersion ||= 2;
+  store.schemaVersion = Math.max(3, Number(store.schemaVersion || 0));
   store.account ||= {};
   store.holdings ||= [];
   store.trades ||= [];
@@ -78,6 +88,7 @@ function migrateStore(store) {
   store.dailySessions ||= {};
   store.analyses ||= [];
   store.plans ||= [];
+  store.planVersions ||= [];
   store.marketCloses ||= {};
   store.auditLog ||= [];
   store.stockPnlSnapshots ||= [];
@@ -115,14 +126,77 @@ function migrateStore(store) {
       plan.completedAt ||= session.postmarket.completedAt;
     });
   }
+  for (const plan of store.plans) {
+    const snapshotKey = `${plan.id}:v${Number(plan.version || 1)}`;
+    if (store.planVersions.some(item => item.snapshotKey === snapshotKey)) continue;
+    store.planVersions.push({
+      ...JSON.parse(JSON.stringify(plan)),
+      snapshotKey,
+      snapshotId: `plan-version-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      savedAt: plan.updatedAt || plan.createdAt || new Date().toISOString()
+    });
+  }
+  ensureLedger(store);
+  return store;
+}
+
+let database = null;
+
+function openDatabase() {
+  if (database) return database;
+  database = new DatabaseSync(DATABASE_FILE);
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = FULL;
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS app_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS state_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      revision INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  const existing = database.prepare("SELECT revision FROM app_state WHERE id = 1").get();
+  if (!existing) {
+    const seed = fs.existsSync(STORE_FILE)
+      ? JSON.parse(fs.readFileSync(STORE_FILE, "utf8"))
+      : JSON.parse(JSON.stringify(initialStore));
+    const migrated = migrateStore(seed);
+    const now = new Date().toISOString();
+    database.prepare("INSERT INTO app_state (id, revision, payload, updated_at) VALUES (1, 1, ?, ?)")
+      .run(JSON.stringify(migrated), now);
+    database.prepare("INSERT INTO state_versions (revision, reason, payload, created_at) VALUES (1, 'v0.2-migration', ?, ?)")
+      .run(JSON.stringify(migrated), now);
+    attachRevision(migrated, 1);
+    backupStore("before-v0.2-migration");
+    const mirrorTmp = `${STORE_FILE}.tmp`;
+    fs.writeFileSync(mirrorTmp, JSON.stringify(migrated, null, 2), "utf8");
+    fs.renameSync(mirrorTmp, STORE_FILE);
+    fs.writeFileSync(path.join(REPORT_DIR, "review-latest.json"), JSON.stringify(buildReviewPacket(migrated), null, 2), "utf8");
+  }
+  return database;
+}
+
+function attachRevision(store, revision) {
+  Object.defineProperty(store, "__revision", {
+    value: Number(revision),
+    writable: true,
+    configurable: true,
+    enumerable: false
+  });
   return store;
 }
 
 function loadStore() {
-  if (!fs.existsSync(STORE_FILE)) {
-    fs.writeFileSync(STORE_FILE, JSON.stringify(initialStore, null, 2), "utf8");
-  }
-  return migrateStore(JSON.parse(fs.readFileSync(STORE_FILE, "utf8")));
+  const row = openDatabase().prepare("SELECT revision, payload FROM app_state WHERE id = 1").get();
+  return attachRevision(migrateStore(JSON.parse(row.payload)), row.revision);
 }
 
 function backupStore(reason = "write") {
@@ -147,11 +221,38 @@ function loadStoreSafe() {
 
 function saveStore(store, reason = "write") {
   backupStore(reason);
-  store.schemaVersion = 2;
+  rebuildLedgerProjection(store);
+  store.schemaVersion = 3;
   store.updatedAt = new Date().toISOString();
+  const db = openDatabase();
+  const payload = JSON.stringify(store);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = db.prepare("SELECT revision FROM app_state WHERE id = 1").get();
+    const expectedRevision = Number(store.__revision ?? current.revision);
+    if (Number(current.revision) !== expectedRevision) {
+      throw new Error("数据已被其他操作更新，请重新加载后再试");
+    }
+    const nextRevision = Number(current.revision) + 1;
+    db.prepare("UPDATE app_state SET revision = ?, payload = ?, updated_at = ? WHERE id = 1")
+      .run(nextRevision, payload, store.updatedAt);
+    db.prepare("INSERT INTO state_versions (revision, reason, payload, created_at) VALUES (?, ?, ?, ?)")
+      .run(nextRevision, String(reason), payload, store.updatedAt);
+    db.prepare("DELETE FROM state_versions WHERE id NOT IN (SELECT id FROM state_versions ORDER BY id DESC LIMIT 180)").run();
+    db.exec("COMMIT");
+    attachRevision(store, nextRevision);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   const tmp = `${STORE_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(store, null, 2), "utf8");
   fs.renameSync(tmp, STORE_FILE);
+  try {
+    fs.writeFileSync(path.join(REPORT_DIR, "review-latest.json"), JSON.stringify(buildReviewPacket(store), null, 2), "utf8");
+  } catch (error) {
+    console.warn("最新复盘包同步失败：", error.message);
+  }
 }
 
 function loadStockCache() {
@@ -252,13 +353,17 @@ function normalizeTrade(input) {
   if (!["BUY", "SELL"].includes(side)) throw new Error("交易方向必须是BUY或SELL");
   const quantity = Number(input.quantity);
   const price = Number(input.price);
-  if (!(quantity > 0) || !(price > 0)) throw new Error("数量和价格必须大于0");
+  const code = String(input.code || "").trim();
+  if (!/^\d{6}$/.test(code)) throw new Error("证券代码必须是6位数字");
+  if (!Number.isInteger(quantity) || !(quantity > 0) || !Number.isFinite(price) || !(price > 0)) throw new Error("数量必须是正整数，价格必须大于0");
+  if (input.fee !== "" && input.fee != null && (!Number.isFinite(Number(input.fee)) || Number(input.fee) < 0)) throw new Error("费用必须是大于或等于0的数字");
   return {
     id: input.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     date: input.date || localDateKey(),
     time: input.time || new Date().toTimeString().slice(0, 5),
-    code: String(input.code || "").trim(),
+    code,
     name: String(input.name || "").trim(),
+    market: String(input.market || (String(input.code || "").startsWith("6") ? "SH" : "SZ")),
     side,
     quantity,
     price,
@@ -267,6 +372,7 @@ function normalizeTrade(input) {
     premarketPlanExists: Boolean(input.premarketPlanExists),
     planFollowed: Boolean(input.planFollowed ?? input.planBeforeTrade),
     planBeforeTrade: Boolean(input.premarketPlanExists),
+    executionStatus: ["followed", "delayed", "unplanned"].includes(input.executionStatus) ? input.executionStatus : (input.planFollowed ? "followed" : "unplanned"),
     emotion: String(input.emotion || "").trim(),
     createdAt: new Date().toISOString()
   };
@@ -351,14 +457,15 @@ function importCsv(store, csvText, updateHoldings = false) {
         continue;
       }
       trade.violations = detectViolations(store, trade);
+      trade.accountApplied = Boolean(updateHoldings);
       if (updateHoldings) {
         if (trade.side === "SELL") {
           const holding = store.holdings.find(item => item.code === trade.code);
           if (!holding || holding.quantity < trade.quantity) throw new Error("导入卖出数量超过当前持仓，未更新账本");
         }
-        applyTradeToHolding(store, trade, true);
       }
       store.trades.push(trade);
+      if (updateHoldings) appendTradeEvent(store, trade);
       imported.push(trade);
     } catch (error) {
       skipped.push({ line: i + 1, reason: error.message });
@@ -371,6 +478,7 @@ function detectViolations(store, trade) {
   const flags = [];
   if (!trade.premarketPlanExists) flags.push("无盘前计划");
   else if (!trade.planFollowed) flags.push("偏离盘前计划");
+  if (trade.executionStatus === "delayed") flags.push("触发后延迟执行");
   if (!trade.reason) flags.push("未记录交易理由");
   if (/怕踏空|赶紧买|追回|后悔|回本/.test(`${trade.reason} ${trade.emotion}`)) {
     flags.push("疑似情绪交易/FOMO");
@@ -389,6 +497,24 @@ function detectViolations(store, trade) {
     }
   }
   return flags;
+}
+
+function validateTradeForPosting(store, trade) {
+  if (trade.side === "SELL") {
+    const holding = store.holdings.find(item => item.code === trade.code);
+    if (!holding || Number(holding.quantity) < Number(trade.quantity)) throw new Error("卖出数量不能超过当前持仓数量");
+    return;
+  }
+  const fee = Number(trade.fee || 0);
+  const requiredCash = Number(trade.price) * Number(trade.quantity) + fee;
+  if (requiredCash > Number(store.account.availableCash || 0) + 0.005) throw new Error("可用现金不足，不能记录这笔买入");
+  const isNewPosition = !store.holdings.some(item => item.code === trade.code);
+  if (isNewPosition && store.holdings.length >= Number(store.account.maxPositions || Infinity)) throw new Error("已达到最大持仓数量，不能新增仓位");
+  if (trade.date === localDateKey() && Number(store.account.todayPnl) < 0) {
+    const summary = accountSummary(store);
+    const lossLimit = summary.totalAssets * Number(store.account.maxDailyLossPct || 0) / 100;
+    if (lossLimit > 0 && Math.abs(Number(store.account.todayPnl)) >= lossLimit) throw new Error("已达到当日亏损上限，停止新增风险");
+  }
 }
 
 function applyTradeToHolding(store, trade, updateAccount = false) {
@@ -506,7 +632,42 @@ function dataHealth(store) {
     issues.push({ type: "stale-broker-snapshot", level: "info", count: 1, message: "券商账户快照早于最新成交，暂不可对账" });
   }
   if (Number(store.account.availableCash || 0) < 0) issues.push({ type: "negative-cash", level: "error", count: 1, message: "可用现金为负数，请立即核对" });
+  const summaryTotal = Number(summary.totalAssets || 0);
+  const dailyLossLimit = summaryTotal * Number(store.account.maxDailyLossPct || 0) / 100;
+  if (dailyLossLimit > 0 && Number(store.account.todayPnl) < 0 && Math.abs(Number(store.account.todayPnl)) >= dailyLossLimit) {
+    issues.push({ type: "daily-loss-limit", level: "error", count: 1, message: "已达到当日亏损上限，停止新增风险" });
+  }
+  if (!store.ledger?.events) issues.push({ type: "ledger-missing", level: "error", count: 1, message: "可信账本尚未建立" });
   return { score: Math.max(0, 100 - issues.reduce((sum, issue) => sum + (issue.level === "error" ? 30 : issue.level === "warning" ? 10 : 3), 0)), issues };
+}
+
+function disciplineSummary(store, days = 7) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - Math.max(1, Number(days)) + 1);
+  const cutoffDate = localDateKey(cutoff);
+  const trades = store.trades.filter(trade => trade.date >= cutoffDate);
+  const planned = trades.filter(trade => trade.premarketPlanExists === true);
+  const unplanned = trades.filter(trade => trade.executionStatus === "unplanned" || trade.premarketPlanExists === false);
+  const delayed = trades.filter(trade => trade.executionStatus === "delayed");
+  const fees = trades.reduce((sum, trade) => sum + Number(trade.fee || 0), 0);
+  let sameDayReversals = 0;
+  const seen = new Set();
+  for (const trade of [...trades].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))) {
+    const key = `${trade.date}:${trade.code}`;
+    if (seen.has(`${key}:${trade.side === "BUY" ? "SELL" : "BUY"}`)) sameDayReversals += 1;
+    seen.add(`${key}:${trade.side}`);
+  }
+  return {
+    days: Number(days),
+    fromDate: cutoffDate,
+    tradeCount: trades.length,
+    plannedCount: planned.length,
+    planFollowRate: planned.length ? +(planned.filter(trade => trade.planFollowed).length / planned.length * 100).toFixed(1) : null,
+    unplannedCount: unplanned.length,
+    delayedCount: delayed.length,
+    sameDayReversals,
+    fees: +fees.toFixed(2)
+  };
 }
 
 function selectedPlan(store, requestedDate) {
@@ -543,6 +704,14 @@ function upsertPlan(store, input) {
     generationBasis: input.generationBasis || plan.generationBasis || null,
     confirmedAt: input.status === "active" ? now : plan.confirmedAt || null,
     updatedAt: now
+  });
+  store.planVersions ||= [];
+  const snapshotKey = `${plan.id}:v${plan.version}`;
+  store.planVersions.push({
+    ...JSON.parse(JSON.stringify(plan)),
+    snapshotKey,
+    snapshotId: `plan-version-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    savedAt: now
   });
   return plan;
 }
@@ -604,6 +773,38 @@ async function fetchTechnicalSnapshot(asset) {
 
 function researchForDate(store, date) {
   return [...(store.researchSnapshots || [])].filter(item => item.reviewDate === date).sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))[0] || null;
+}
+
+function upsertResearchExternalFactor(store, date, input) {
+  let research = researchForDate(store, date);
+  if (!research) {
+    research = { id: `research-${date}-${Date.now()}`, reviewDate: date, createdAt: new Date().toISOString(), externalFactors: [], status: "external-only" };
+    store.researchSnapshots.push(research);
+  }
+  research.externalFactors ||= [];
+  const title = String(input.title || "").trim();
+  const impact = String(input.impact || "").trim();
+  const source = String(input.source || "").trim();
+  const sourceUrl = String(input.url || "").trim();
+  if (!title || !impact || !source) throw new Error("外部研究必须填写标题、影响判断和来源");
+  if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) throw new Error("研究来源链接必须使用http或https");
+  let factor = input.id ? research.externalFactors.find(item => item.id === input.id) : null;
+  if (!factor) {
+    factor = { id: `factor-${Date.now()}-${Math.random().toString(16).slice(2)}` };
+    research.externalFactors.push(factor);
+  }
+  Object.assign(factor, {
+    category: String(input.category || "其他").trim(),
+    title,
+    impact,
+    source,
+    url: sourceUrl,
+    publishedAt: String(input.publishedAt || date),
+    updatedAt: new Date().toISOString()
+  });
+  research.updatedAt = factor.updatedAt;
+  research.status = research.marketTechnical && research.holdingsTechnical?.length ? "ready" : "external-only";
+  return { research, factor };
 }
 
 async function refreshResearchTechnicals(store, date = localDateKey()) {
@@ -723,7 +924,9 @@ function buildReviewPacket(store) {
     return Date.now() - new Date(h.quoteUpdatedAt).getTime() > 12 * 60 * 60 * 1000;
   }).map(h => ({ code: h.code, name: h.name, quoteUpdatedAt: h.quoteUpdatedAt || null }));
   return {
+    snapshotId: `review-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     generatedAt: new Date().toISOString(),
+    storeRevision: store.__revision ?? null,
     account: store.account,
     accountSnapshot: {
       totalAssets,
@@ -758,6 +961,12 @@ function buildReviewPacket(store) {
     marketClose: store.marketCloses?.[today] || null,
     accountSummary: accountSummary(store),
     dataHealth: dataHealth(store),
+    ledger: {
+      version: store.ledger?.version || null,
+      establishedAt: store.ledger?.establishedAt || null,
+      eventCount: store.ledger?.events?.length || 0
+    },
+    discipline: disciplineSummary(store, 7),
     requestedAnalysis: [
       "识别追高、怕踏空、亏损补仓、卖出后追回、过度交易等行为",
       "区分交易结果与决策质量，不因赚钱就判定操作正确",
@@ -1029,6 +1238,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         account: accountSummary(store),
         health: dataHealth(store),
+        discipline: disciplineSummary(store, 7),
+        ledger: { version: store.ledger?.version || null, establishedAt: store.ledger?.establishedAt || null, eventCount: store.ledger?.events?.length || 0, revision: store.__revision },
         plan: selectedPlan(store, url.searchParams.get("date")),
         nextTradingDate: nextTradingDate(new Date()),
         latestMarketClose: Object.values(store.marketCloses || {}).sort((a, b) => b.date.localeCompare(a.date))[0] || null
@@ -1036,7 +1247,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/plans" && req.method === "GET") {
       const store = loadStore();
-      return json(res, 200, { plans: [...store.plans].sort((a, b) => b.planForDate.localeCompare(a.planForDate)), selected: selectedPlan(store, url.searchParams.get("date")) });
+      const selected = selectedPlan(store, url.searchParams.get("date"));
+      const versions = selected
+        ? [...store.planVersions].filter(item => item.id === selected.id).sort((a, b) => Number(b.version) - Number(a.version))
+        : [];
+      return json(res, 200, { plans: [...store.plans].sort((a, b) => b.planForDate.localeCompare(a.planForDate)), selected, versions });
     }
     if (url.pathname === "/api/plans" && req.method === "PUT") {
       const body = await readBody(req);
@@ -1055,11 +1270,8 @@ const server = http.createServer(async (req, res) => {
       const file = path.join(BACKUP_DIR, name);
       if (!name.endsWith(".json") || !fs.existsSync(file)) return json(res, 404, { error: "备份版本不存在" });
       const restored = migrateStore(JSON.parse(fs.readFileSync(file, "utf8")));
-      backupStore("before-restore");
       restored.auditLog.push({ id: `audit-${Date.now()}`, type: "backup-restored", source: name, createdAt: new Date().toISOString() });
-      const tmp = `${STORE_FILE}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(restored, null, 2), "utf8");
-      fs.renameSync(tmp, STORE_FILE);
+      saveStore(attachRevision(restored, loadStore().__revision), "backup-restore");
       return json(res, 200, { store: restored, restoredFrom: name });
     }
     if (url.pathname === "/api/market-close/refresh" && req.method === "POST") {
@@ -1078,14 +1290,20 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/holdings" && req.method === "PUT") {
       const body = await readBody(req);
       const store = loadStore();
-      store.holdings = Array.isArray(body.holdings) ? body.holdings : store.holdings;
+      if (!Array.isArray(body.holdings)) throw new Error("持仓格式错误");
+      appendPositionReconciliationEvent(store, body.holdings, body.note || "手工持仓校正");
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "positions-reconciled", createdAt: new Date().toISOString() });
       saveStore(store, "holdings");
       return json(res, 200, store);
     }
     if (url.pathname === "/api/account" && req.method === "PUT") {
       const body = await readBody(req);
       const store = loadStore();
-      store.account.availableCash = Number(body.availableCash || 0);
+      const availableCash = Number(body.availableCash);
+      if (!Number.isFinite(availableCash) || availableCash < 0) throw new Error("可用现金必须是大于或等于0的数字");
+      if (Math.abs(availableCash - Number(store.account.availableCash || 0)) > 0.005) {
+        appendCashReconciliationEvent(store, availableCash, "券商账户快照现金校正");
+      }
       store.account.todayPnl = body.todayPnl === "" || body.todayPnl == null
         ? null
         : Number(body.todayPnl);
@@ -1153,6 +1371,14 @@ const server = http.createServer(async (req, res) => {
       saveStore(store, "research-technicals");
       return json(res, 200, { research, store });
     }
+    if (url.pathname === "/api/research/external-factors" && req.method === "PUT") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const result = upsertResearchExternalFactor(store, String(body.date || localDateKey()), body.factor || {});
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "research-external-factor-saved", researchId: result.research.id, factorId: result.factor.id, createdAt: new Date().toISOString() });
+      saveStore(store, "research-external-factor");
+      return json(res, 200, { ...result, store });
+    }
     if (url.pathname === "/api/plans/generate-from-review" && req.method === "POST") {
       const body = await readBody(req);
       const store = loadStore();
@@ -1164,16 +1390,16 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === "/api/trades" && req.method === "POST") {
       const body = await readBody(req);
       const store = loadStore();
-      const plannedRules = store.dailySessions?.[String(body.date || localDateKey())]?.premarket?.rules || [];
-      body.premarketPlanExists = plannedRules.some(rule => String(rule.code) === String(body.code));
+      const tradeDate = String(body.date || localDateKey());
+      const applicablePlan = store.plans.find(plan => plan.planForDate === tradeDate && plan.status === "active");
+      const plannedRules = applicablePlan?.rules || [];
+      body.premarketPlanExists = Boolean(applicablePlan && plannedRules.some(rule => String(rule.code) === String(body.code)));
       const trade = normalizeTrade(body);
-      if (trade.side === "SELL") {
-        const holding = store.holdings.find(h => h.code === trade.code);
-        if (!holding || holding.quantity < trade.quantity) throw new Error("卖出数量不能超过当前持仓数量");
-      }
+      validateTradeForPosting(store, trade);
       trade.violations = detectViolations(store, trade);
-      applyTradeToHolding(store, trade, true);
+      trade.accountApplied = true;
       store.trades.push(trade);
+      appendTradeEvent(store, trade);
       store.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-created", tradeId: trade.id, date: trade.date, createdAt: new Date().toISOString() });
       saveStore(store, "trade");
       return json(res, 201, { trade, store });
@@ -1184,17 +1410,50 @@ const server = http.createServer(async (req, res) => {
       const store = loadStore();
       const trade = store.trades.find(item => item.id === decodeURIComponent(feeRoute[1]));
       if (!trade) return json(res, 404, { error: "未找到这笔成交" });
-      updateTradeFee(store, trade, Number(body.fee));
+      const nextFee = Number(body.fee);
+      if (!Number.isFinite(nextFee) || nextFee < 0) throw new Error("费用必须是大于或等于0的数字");
+      const isLedgerApplied = store.ledger.events.some(event => event.type === "TRADE_RECORDED" && String(event.tradeId) === String(trade.id))
+        || (trade.accountApplied !== false && Number.isFinite(Number(trade.cashEffect)));
+      const feeDelta = isLedgerApplied ? appendFeeAdjustmentEvent(store, trade, nextFee) : 0;
+      if (!isLedgerApplied) {
+        trade.fee = +nextFee.toFixed(2);
+        trade.feePending = false;
+        trade.feeUpdatedAt = new Date().toISOString();
+      }
+      const pendingSettlement = Number(store.account.pendingSettlementAdjustment || 0);
+      if (pendingSettlement < 0 && feeDelta > 0) {
+        store.account.pendingSettlementAdjustment = +(pendingSettlement + Math.min(feeDelta, Math.abs(pendingSettlement))).toFixed(2);
+      } else if (pendingSettlement > 0 && feeDelta < 0) {
+        store.account.pendingSettlementAdjustment = +(pendingSettlement - Math.min(Math.abs(feeDelta), pendingSettlement)).toFixed(2);
+      }
       store.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-fee-updated", tradeId: trade.id, fee: trade.fee, createdAt: new Date().toISOString() });
       saveStore(store, "trade-fee");
       return json(res, 200, { trade, store });
     }
+    if (url.pathname === "/api/trades/import/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      const source = loadStore();
+      const previewStore = attachRevision(JSON.parse(JSON.stringify(source)), source.__revision);
+      const result = importCsv(previewStore, body.csv, Boolean(body.updateHoldings));
+      return json(res, 200, {
+        imported: result.imported,
+        skipped: result.skipped,
+        summary: accountSummary(previewStore),
+        blockingErrors: result.skipped.filter(item => item.reason !== "疑似重复记录")
+      });
+    }
     if (url.pathname === "/api/trades/import" && req.method === "POST") {
       const body = await readBody(req);
       const store = loadStore();
-      const result = importCsv(store, body.csv, Boolean(body.updateHoldings));
-      saveStore(store, "trade-import");
-      return json(res, 200, { ...result, store });
+      const working = attachRevision(JSON.parse(JSON.stringify(store)), store.__revision);
+      const result = importCsv(working, body.csv, Boolean(body.updateHoldings));
+      const blockingErrors = result.skipped.filter(item => item.reason !== "疑似重复记录");
+      if (body.atomic !== false && blockingErrors.length) {
+        throw new Error(`CSV存在${blockingErrors.length}行错误，已取消整批导入`);
+      }
+      working.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-import", imported: result.imported.length, skipped: result.skipped.length, createdAt: new Date().toISOString() });
+      saveStore(working, "trade-import");
+      return json(res, 200, { ...result, store: working });
     }
     if (url.pathname === "/api/quotes/refresh" && req.method === "POST") {
       const store = loadStore();
@@ -1251,20 +1510,49 @@ const server = http.createServer(async (req, res) => {
     }
     return serveStatic(req, res);
   } catch (error) {
-    const isClientError = /必须|不能|超过|未找到|不存在|格式|数量|价格|费用|计划/.test(String(error.message || ""));
-    return json(res, isClientError ? 400 : 500, { error: error.message });
+    const message = String(error.message || "");
+    if (/数据已被其他操作更新/.test(message)) return json(res, 409, { error: message });
+    const isClientError = /必须|不能|超过|未找到|不存在|格式|数量|价格|费用|计划|CSV|取消整批|现金不足|达到.*上限/.test(message);
+    return json(res, isClientError ? 400 : 500, { error: message });
   }
 });
 
 let closeRefreshRunning = false;
+function missedCloseDate(store, now = new Date()) {
+  const completedDates = Object.values(store.marketCloses || {})
+    .filter(item => item.status === "completed")
+    .map(item => item.date)
+    .sort();
+  const latestCompleted = completedDates.at(-1);
+  if (!latestCompleted) return null;
+  const cursor = new Date(`${latestCompleted}T12:00:00+08:00`);
+  const today = localDateKey(now);
+  for (let step = 0; step < 14; step += 1) {
+    cursor.setDate(cursor.getDate() + 1);
+    const date = localDateKey(cursor);
+    if (date >= today) break;
+    if ([0, 6].includes(cursor.getDay())) continue;
+    if (store.marketCloses?.[date]?.status !== "completed") return date;
+  }
+  return null;
+}
+
 async function closingRefreshTick() {
   if (closeRefreshRunning) return;
   const now = new Date();
+  const store = loadStore();
+  if (store.settings?.autoCloseRefresh === false) return;
+  const missedDate = missedCloseDate(store, now);
+  if (missedDate) {
+    closeRefreshRunning = true;
+    try { await runClosingRefresh(missedDate, "automatic-backfill"); }
+    catch (error) { console.error("遗漏收盘行情补跑失败：", error.message); }
+    finally { closeRefreshRunning = false; }
+    return;
+  }
   if ([0, 6].includes(now.getDay())) return;
   const minutes = now.getHours() * 60 + now.getMinutes();
   if (minutes < 15 * 60 + 35) return;
-  const store = loadStore();
-  if (store.settings?.autoCloseRefresh === false) return;
   const date = localDateKey(now);
   const snapshot = store.marketCloses?.[date];
   if (snapshot?.status === "completed") return;

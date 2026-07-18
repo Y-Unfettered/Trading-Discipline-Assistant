@@ -202,6 +202,9 @@ function renderDashboard() {
   const brokerComparable = account.brokerSnapshotAt && (!account.latestTradeAt || new Date(account.brokerSnapshotAt) >= new Date(account.latestTradeAt));
   $("#accountEquation").innerHTML = `<div class="panel-title"><div><p class="eyebrow">ACCOUNT EQUATION</p><h2>资产口径</h2></div><span class="muted">截至 ${dateTime(account.asOf)}</span></div><div class="equation"><strong>${money(account.availableCash)}</strong><span>成交后毛现金</span><b>＋</b><strong>${money(account.marketValue)}</strong><span>持仓市值</span>${account.pendingSettlementAdjustment ? `<b>${account.pendingSettlementAdjustment >= 0 ? "＋" : "−"}</b><strong class="warning">${money(Math.abs(account.pendingSettlementAdjustment))}</strong><span>待分配结算差额</span>` : ""}<b>＝</b><strong>${money(account.totalAssets)}</strong><span>当前总资产</span></div><p class="muted">卖出净额进入现金，已实现盈利已包含其中，不重复加到总资产。待分配差额会在券商公布具体费用后转入对应成交，不会再次扣款。</p>${account.brokerTotalAssets == null ? '<p class="muted">尚未录入券商快照。</p>' : brokerComparable ? `<p>券商同一时点总资产 ${money(account.brokerTotalAssets)}，差额 <span class="${Math.abs(account.totalAssets - account.brokerTotalAssets) < .01 ? "positive" : "warning"}">${money(account.totalAssets - account.brokerTotalAssets)}</span></p>` : `<p class="warning">券商快照 ${money(account.brokerTotalAssets)} 截至 ${dateTime(account.brokerSnapshotAt)}，早于最新成交，当前不做差额报错。</p>`}`;
 
+  const discipline = dashboard.discipline || {};
+  $("#weeklyDiscipline").innerHTML = `<div class="panel-title"><div><p class="eyebrow">WEEKLY DISCIPLINE</p><h2>近${discipline.days || 7}日纪律摘要</h2></div><span class="quiet-badge">账本修订 ${dashboard.ledger?.revision || "-"}</span></div><div class="fact-grid"><div class="close-cell"><span>成交 / 计划外</span><strong>${discipline.tradeCount || 0} / ${discipline.unplannedCount || 0}</strong></div><div class="close-cell"><span>触发后延迟 / 同日反向</span><strong>${discipline.delayedCount || 0} / ${discipline.sameDayReversals || 0}</strong></div><div class="close-cell"><span>计划执行率 / 费用</span><strong>${discipline.planFollowRate == null ? "暂无" : `${discipline.planFollowRate}%`} · ${money(discipline.fees)}</strong></div></div><p class="muted">从 v0.2 起，成交、费用补录和现金校正会写入不可变账本事件；当前共 ${dashboard.ledger?.eventCount || 0} 条。</p>`;
+
   $("#overviewHoldings").innerHTML = store.holdings.map(holding => {
     const marketValue = holding.quantity * holding.lastPrice;
     const pnl = holding.brokerPnl == null ? (holding.lastPrice - holding.cost) * holding.quantity + Number(holding.pnlAdjustment || 0) : Number(holding.brokerPnl);
@@ -228,6 +231,8 @@ function renderPlan(plan) {
     const rule = savedRules.find(item => String(item.code) === String(holding.code)) || {};
     return `<div class="rule-editor" data-rule-code="${holding.code}"><div class="rule-title"><h3>${escapeHtml(holding.name)}</h3><span class="muted">${holding.code} · ${holding.quantity}股</span></div><div class="rule-grid"><label>等待条件<textarea data-field="wait">${escapeHtml(rule.wait || "")}</textarea></label><label>止盈/减仓条件<textarea data-field="sell">${escapeHtml(rule.sell || "")}</textarea></label><label>止损/撤退条件<textarea data-field="stop">${escapeHtml(rule.stop || "")}</textarea></label><label>禁止动作<textarea data-field="forbidden">${escapeHtml(rule.forbidden || "不做计划外加仓")}</textarea></label></div></div>`;
   }).join("");
+  const versions = [...(store.planVersions || [])].filter(item => item.id === plan?.id).sort((a, b) => Number(b.version) - Number(a.version));
+  $("#planVersionHistory").innerHTML = versions.length ? versions.slice(0, 20).map(item => `<details class="analysis-record"><summary><strong>${item.planForDate} · V${item.version}</strong><span class="tag">${escapeHtml(item.status || "draft")}</span><span class="muted">${dateTime(item.savedAt || item.updatedAt)}</span></summary><div class="analysis-record-body"><p><strong>训练目标：</strong>${escapeHtml(item.trainingFocus || "未填写")}</p><p><strong>账户限制：</strong>${escapeHtml(item.accountRules || "未填写")}</p><p><strong>环境核验：</strong>${escapeHtml(item.marketObservation || "未填写")}</p></div></details>`).join("") : '<p class="muted">首次保存后会在这里形成不可变版本。</p>';
   renderIntraday();
 }
 
@@ -337,7 +342,7 @@ function renderResearchPanel() {
   if (!research) return $("#researchPanel").innerHTML = '<p class="warning">尚无研究快照。先刷新均线，再补充带来源的外部研究。</p>';
   const market = research.marketTechnical;
   const technicalRows = [market, ...(research.holdingsTechnical || [])].filter(Boolean);
-  const sourceRows = (research.externalFactors || []).map(item => `<article class="research-source"><div><span class="tag">${escapeHtml(item.category)}</span> <strong>${escapeHtml(item.title)}</strong></div><p>${escapeHtml(item.impact)}</p><a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source)} · ${escapeHtml(item.publishedAt || "")}</a></article>`).join("");
+  const sourceRows = (research.externalFactors || []).map(item => `<article class="research-source"><div><span class="tag">${escapeHtml(item.category)}</span> <strong>${escapeHtml(item.title)}</strong></div><p>${escapeHtml(item.impact)}</p>${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.source)} · ${escapeHtml(item.publishedAt || "")}</a>` : `<span class="muted">${escapeHtml(item.source)} · ${escapeHtml(item.publishedAt || "")}</span>`}</article>`).join("");
   $("#researchPanel").innerHTML = `<div class="research-meta"><strong>研究日期 ${research.reviewDate}</strong><span class="quiet-badge ${research.status === "ready" ? "positive" : "warning"}">${research.status === "ready" ? "可生成计划" : "资料未完整"}</span></div><div class="table-wrap"><table><thead><tr><th>标的</th><th>收盘</th><th>当日高/低</th><th>MA5</th><th>MA10</th><th>MA30</th><th>MA60</th><th>结构</th></tr></thead><tbody>${technicalRows.map(item => `<tr><td><strong>${escapeHtml(item.name)}</strong><br><span class="muted">${item.code}</span></td><td>${Number(item.close).toFixed(2)}</td><td>${Number(item.high).toFixed(2)} / ${Number(item.low).toFixed(2)}</td><td>${Number(item.ma5).toFixed(2)}</td><td>${Number(item.ma10).toFixed(2)}</td><td>${Number(item.ma30).toFixed(2)}</td><td>${Number(item.ma60).toFixed(2)}</td><td>${escapeHtml(item.structure)}</td></tr>`).join("")}</tbody></table></div><div class="research-sources">${sourceRows || '<p class="warning">外部政策与资讯尚未留档。</p>'}</div><p class="muted">研究只用于建立条件情景，不保证收益，也不把盘中反弹自动认定为趋势反转。</p>`;
 }
 
@@ -508,9 +513,9 @@ $("#pendingDataPanel").addEventListener("submit", async event => {
 $("#refreshClose").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true; button.textContent = "正在获取收盘行情…";
-  try { const result = await api("/api/market-close/refresh", { method: "POST", body: JSON.stringify({ date: localDateKey() }) }); store = result.store; dashboard = await api("/api/dashboard"); renderAll(); }
+  try { const result = await api("/api/market-close/refresh", { method: "POST", body: JSON.stringify({ date: $("#closeRefreshDate").value || localDateKey() }) }); store = result.store; dashboard = await api("/api/dashboard"); renderAll(); }
   catch (error) { alert(error.message); }
-  finally { button.disabled = false; button.textContent = "立即补跑收盘行情"; }
+  finally { button.disabled = false; button.textContent = "补跑收盘行情"; }
 });
 
 $("#snapshotForm").addEventListener("submit", async event => {
@@ -538,6 +543,22 @@ $("#refreshResearchTechnicals").addEventListener("click", async event => {
   }
   catch (error) { setMessage("#researchMessage", error.message, "negative"); finishTaskModal(false, "均线刷新失败", error.message); }
   finally { button.disabled = false; }
+});
+
+$("#researchFactorForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    const result = await api("/api/research/external-factors", { method: "PUT", body: JSON.stringify({
+      date: localDateKey(),
+      factor: Object.fromEntries(form.entries())
+    }) });
+    store = result.store;
+    renderResearchPanel();
+    event.currentTarget.reset();
+    event.currentTarget.elements.publishedAt.value = localDateKey();
+    setMessage("#researchFactorMessage", "研究来源已保存；技术数据完整后即可生成计划");
+  } catch (error) { setMessage("#researchFactorMessage", error.message, "negative"); }
 });
 
 $("#generateResearchPlan").addEventListener("click", async event => {
@@ -600,7 +621,21 @@ async function pollAnalysis() {
   }
 }
 
-$("#importCsv").addEventListener("click", async () => { const file = $("#csvFile").files[0]; if (!file) return setMessage("#importMessage", "请先选择CSV文件", "warning"); try { const result = await api("/api/trades/import", { method: "POST", body: JSON.stringify({ csv: await file.text(), updateHoldings: $("#updateHoldingsOnImport").checked }) }); store = result.store; dashboard = await api("/api/dashboard"); renderAll(); setMessage("#importMessage", `导入${result.imported.length}笔，跳过${result.skipped.length}笔`); } catch (error) { setMessage("#importMessage", error.message, "negative"); } });
+$("#importCsv").addEventListener("click", async () => {
+  const file = $("#csvFile").files[0];
+  if (!file) return setMessage("#importMessage", "请先选择CSV文件", "warning");
+  const csv = await file.text();
+  const updateHoldings = $("#updateHoldingsOnImport").checked;
+  try {
+    const preview = await api("/api/trades/import/preview", { method: "POST", body: JSON.stringify({ csv, updateHoldings }) });
+    if (preview.blockingErrors.length) return setMessage("#importMessage", `发现${preview.blockingErrors.length}行错误：${preview.blockingErrors.slice(0, 3).map(item => `第${item.line}行 ${item.reason}`).join("；")}。整批未导入。`, "negative");
+    if (!preview.imported.length) return setMessage("#importMessage", `没有可导入的新成交；跳过${preview.skipped.length}笔重复记录`, "warning");
+    const confirmed = confirm(`预览完成：将导入${preview.imported.length}笔，跳过${preview.skipped.length}笔重复记录。\n${updateHoldings ? `导入后预计现金 ${money(preview.summary.availableCash)}、持仓市值 ${money(preview.summary.marketValue)}。` : "本次只导入历史，不更新账户持仓。"}\n确认提交整批数据吗？`);
+    if (!confirmed) return setMessage("#importMessage", "已取消导入，账本没有变化", "warning");
+    const result = await api("/api/trades/import", { method: "POST", body: JSON.stringify({ csv, updateHoldings, atomic: true }) });
+    store = result.store; dashboard = await api("/api/dashboard"); renderAll(); setMessage("#importMessage", `已原子导入${result.imported.length}笔，跳过${result.skipped.length}笔重复记录`);
+  } catch (error) { setMessage("#importMessage", error.message, "negative"); }
+});
 $("#reloadBackups").addEventListener("click", () => renderBackups());
 $("#backupList").addEventListener("click", async event => { const button = event.target.closest(".restore-backup"); if (!button) return; if (!confirm(`将恢复到版本：${button.dataset.name}\n当前数据会先自动备份。继续吗？`)) return; button.disabled = true; try { await api("/api/backups/restore", { method: "POST", body: JSON.stringify({ name: button.dataset.name }) }); await reload(); await renderBackups(); alert("恢复完成，原当前版本已保留为备份。"); } catch (error) { alert(error.message); button.disabled = false; } });
 
@@ -657,6 +692,6 @@ $("#scrollTopButton").addEventListener("click", () => window.scrollTo({ top: 0, 
 window.addEventListener("scroll", updateScrollTopVisibility, { passive: true });
 window.addEventListener("resize", updateAppHeaderOffset, { passive: true });
 
-initTradeTime(); updateClock(); updateAppHeaderOffset(); updateScrollTopVisibility(); setInterval(updateClock, 1000);
+initTradeTime(); $("#closeRefreshDate").value = localDateKey(); $("#researchFactorForm [name=publishedAt]").value = localDateKey(); updateClock(); updateAppHeaderOffset(); updateScrollTopVisibility(); setInterval(updateClock, 1000);
 requestAnimationFrame(updateAppHeaderOffset);
 reload().catch(error => { document.body.innerHTML = `<main><section class="panel"><h2>应用加载失败</h2><p class="negative">${escapeHtml(error.message)}</p></section></main>`; });

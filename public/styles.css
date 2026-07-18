@@ -12,6 +12,7 @@ button:disabled{opacity:.55;cursor:wait}
 .app-header{position:fixed;top:0;left:0;right:0;z-index:40;background:rgba(11,16,24,.96);backdrop-filter:blur(14px);box-shadow:0 10px 30px rgba(0,0,0,.24)}
 .topbar{max-width:1240px;margin:auto;padding:18px 24px 12px;display:flex;justify-content:space-between;gap:24px;align-items:end}
 .topbar h1{margin:0;font-size:28px}
+.version-badge{display:inline-flex;vertical-align:middle;margin-left:8px;padding:3px 8px;border:1px solid #35516f;border-radius:99px;color:var(--blue);font-size:12px;font-weight:800;letter-spacing:.04em}
 .subtitle,.muted{color:var(--muted)}
 .subtitle{margin:4px 0 0}
 .eyebrow{margin:0 0 4px;color:var(--blue);font-size:11px;font-weight:800;letter-spacing:.16em}
@@ -59,6 +60,8 @@ textarea{min-height:90px;resize:vertical}
 .form-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .form-message{margin-left:12px;color:var(--muted)}
 .date-picker{margin:0;min-width:180px}
+.close-refresh-controls{display:flex;align-items:end;gap:8px}
+.close-refresh-controls input{min-width:150px}
 .plan-banner{display:flex;justify-content:space-between;align-items:center}
 .rule-editor{border-top:1px solid var(--line);padding:16px 0}
 .rule-editor:first-child{border-top:0}
@@ -113,6 +116,7 @@ textarea{min-height:90px;resize:vertical}
 .fact-grid p{margin:8px 0 0;color:var(--muted);font-size:13px}
 .research-meta{display:flex;justify-content:space-between;align-items:center;margin:16px 0 6px}
 .research-sources{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:18px}
+.research-factor-form{margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}
 .research-source{border:1px solid var(--line);border-radius:12px;background:#0f1722;padding:14px}
 .research-source p{margin:10px 0;color:var(--muted)}
 .research-source a{color:var(--blue);font-size:12px}

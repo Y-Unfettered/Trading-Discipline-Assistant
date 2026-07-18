@@ -11,7 +11,7 @@
   <header class="topbar">
     <div>
       <p class="eyebrow">LOCAL DISCIPLINE JOURNAL</p>
-      <h1>交易纪律助手</h1>
+      <h1>交易纪律助手 <span class="version-badge">v0.2</span></h1>
       <p class="subtitle">计划是边界，成交是事实，复盘只评价执行。</p>
     </div>
     <div class="header-status"><span id="clock"></span><span id="saveStatus" class="status-dot">本地数据</span></div>
@@ -41,6 +41,7 @@
         <section class="panel" id="healthPanel"></section>
       </div>
       <section class="panel" id="accountEquation"></section>
+      <section class="panel" id="weeklyDiscipline"></section>
     </section>
 
     <section class="page" data-page-panel="plan">
@@ -70,6 +71,10 @@
           <span id="planMessage" class="form-message"></span>
         </section>
       </form>
+      <section class="panel">
+        <div class="panel-title"><div><p class="eyebrow">IMMUTABLE HISTORY</p><h2>计划版本记录</h2></div><span class="muted">每次保存都保留当时完整内容</span></div>
+        <div id="planVersionHistory"></div>
+      </section>
     </section>
 
     <section class="page" data-page-panel="intraday">
@@ -98,7 +103,7 @@
     </section>
 
     <section class="page" data-page-panel="postmarket">
-      <section class="page-heading"><div><p class="eyebrow">VERIFY BEFORE REVIEW</p><h2>盘后核对与复盘</h2><p class="muted">先把成交、费用、收盘价和账户口径核对清楚，再讨论决策。</p></div><button id="refreshClose" class="secondary">立即补跑收盘行情</button></section>
+      <section class="page-heading"><div><p class="eyebrow">VERIFY BEFORE REVIEW</p><h2>盘后核对与复盘</h2><p class="muted">先把成交、费用、收盘价和账户口径核对清楚，再讨论决策。</p></div><div class="close-refresh-controls"><input id="closeRefreshDate" type="date" aria-label="补跑收盘行情日期"><button id="refreshClose" class="secondary">补跑收盘行情</button></div></section>
       <section class="panel" id="closeStatusPanel"></section>
       <section class="panel" id="pendingDataPanel"></section>
       <section class="panel">
@@ -130,10 +135,23 @@
         <div class="panel-title"><div><p class="eyebrow">RESEARCH BEFORE PLAN</p><h2>环境、持仓与情景研究</h2></div><div><button id="refreshResearchTechnicals" class="secondary">刷新均线数据</button> <button id="generateResearchPlan">基于研究生成计划草稿</button></div></div>
         <p class="muted">技术数据由本地程序获取；政策、国际环境和公司资讯必须附来源并留存快照。只有研究数据完整后才生成计划。</p>
         <div id="researchPanel"></div><span id="researchMessage" class="form-message"></span>
+        <form id="researchFactorForm" class="research-factor-form">
+          <h3>补充一条带来源的外部研究</h3>
+          <div class="form-grid">
+            <label>类别<input name="category" placeholder="市场环境 / 公司公告"></label>
+            <label>标题<input name="title" required placeholder="发生了什么"></label>
+            <label>来源<input name="source" required placeholder="证监会 / 交易所 / 公司公告"></label>
+            <label>发布日期<input name="publishedAt" type="date"></label>
+          </div>
+          <label>来源链接<input name="url" type="url" placeholder="https://"></label>
+          <label>对计划的条件式影响<textarea name="impact" required placeholder="只写这条事实会怎样改变风险条件，不写确定性涨跌预测。"></textarea></label>
+          <button type="submit" class="secondary">保存研究来源</button><span id="researchFactorMessage" class="form-message"></span>
+        </form>
       </section>
       <section class="panel">
         <div class="panel-title"><div><p class="eyebrow">CODEX REVIEW</p><h2>纪律分析与历史报告</h2></div><button id="exportReview" class="text-button">只生成复盘包</button></div>
         <button id="runAnalysis">重新生成纪律分析</button>
+        <p class="muted">隐私提示：本地服务只监听 127.0.0.1；点击生成分析后，复盘包会作为 Codex 模型输入处理。账户原始文件不会进入 Git。</p>
         <div id="analysisBox" class="analysis-box"><p class="muted">新分析会新增版本，不覆盖历史报告。</p></div>
         <div id="analysisHistory" class="analysis-history"></div>
       </section>
@@ -187,7 +205,7 @@
       </section>
       <section class="panel">
         <div class="panel-title"><div><p class="eyebrow">IMPORT</p><h2>导入券商成交 CSV</h2></div></div>
-        <p class="muted">缺少费用的成交应保留为待补录。导入前请确认是否同时更新账户与持仓。</p>
+        <p class="muted">缺少费用的成交应保留为待补录。提交前会先预览；存在错误时整批取消，不会留下半份账。</p>
         <input id="csvFile" type="file" accept=".csv,text/csv"><label class="check"><input id="updateHoldingsOnImport" type="checkbox"> 同时更新持仓</label><button id="importCsv" class="secondary">导入</button><span id="importMessage" class="form-message"></span>
       </section>
       <section class="panel">
