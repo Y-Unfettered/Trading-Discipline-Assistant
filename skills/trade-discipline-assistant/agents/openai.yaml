@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易纪律助手"
+  short_description: "按交易日时间线协助核对仓位、制定计划、记录执行并完成盘后复盘"
+  default_prompt: "使用 $trade-discipline-assistant 接管今天的交易日闭环，从仓位核对开始并提示下一步。"

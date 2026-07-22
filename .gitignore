@@ -3,6 +3,7 @@ node_modules/
 logs/
 *.log
 *.tmp
+*.tsbuildinfo
 
 # Personal trading data. Keep these files local only.
 data/

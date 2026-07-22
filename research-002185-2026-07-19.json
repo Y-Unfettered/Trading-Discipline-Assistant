@@ -1,0 +1,296 @@
+{
+  "schemaVersion": "trade-research/v1",
+  "generatedAt": "2026-07-19T15:55:00+08:00",
+  "researchAsOf": "2026-07-19",
+  "asset": {
+    "code": "002185",
+    "name": "华天科技",
+    "market": "SZ",
+    "status": "researching",
+    "industry": "电子-半导体-集成电路封测（申万三级）",
+    "fundamentalView": "国内前三、全球第六集成电路封测厂商，存储封测国内龙头；2025年营收172.14亿元同比+19.03%，归母净利7.11亿元同比+15.30%；2026上半年预盈7.5-8.5亿元，但大额收益来自金融资产浮盈，扣非仅小幅扭亏；资产负债率52.21%，30亿南京存储扩产持续资本开支，重资产周期属性显著",
+    "technicalView": "2026年4月起启动趋势行情，4月低点12.53元至7月中旬最高26.81元区间最大涨幅超114%；7月13日后连续大跌，7月17日收盘18.72元，短期均线空头排列，高位筹码大量兑现，短期技术形态走弱",
+    "volumePriceView": "上涨阶段持续高换手，单日换手率峰值25.25%、单日成交额超210亿；利空披露后放量跌停，抛压集中释放，量能未明显萎缩，短期无企稳缩量信号",
+    "trendView": "中长期受益AI存储、车规芯片国产替代上行周期；短期短期涨幅透支估值，业绩预告暴露出盈利结构瑕疵，中期上涨趋势阶段性破坏，进入调整区间",
+    "upstream": "上游原材料：引线框架、基板、塑封料、晶圆；上游厂商：长江存储、长鑫存储等晶圆制造企业，设备采购来自半导体设备厂商",
+    "downstream": "下游覆盖AI服务器存储、消费电子、汽车电子、工业控制、算力芯片；终端客户含存储原厂、芯片设计公司、整车厂、云计算厂商",
+    "linkedIndicators": "关联指数：半导体指数、中证500、存储芯片指数；关联商品：DRAM/NAND闪存现货价格；关联政策：集成电路产业扶持政策、国产替代、车规芯片补贴；关联汇率：人民币兑美元汇率影响海外马来西亚基地营收结算；行业事件：AI算力资本开支、存储价格周期、先进封装技术迭代",
+    "aiResearchSummary": "华天科技为国内存储封测核心标的，深度绑定国产存储龙头，同步布局2.5D/3D先进封装与车规业务，受益AI算力周期；但存在行业强周期、高资产负债、扩产折旧压力、短期估值过高、盈利依赖非经常性收益等多重约束，短期股价大幅回调，需跟踪主业扣非盈利、存储价格与产能利用率验证景气持续性",
+    "expectedReturn": null,
+    "userMarketView": null
+  },
+  "risks": [
+    {
+      "title": "半导体行业周期下行风险",
+      "mechanism": "存储、消费电子需求转弱导致客户订单下滑，产能利用率降低，单位产品折旧分摊上升，毛利率与归母净利润同步收缩",
+      "observableSignal": "DRAM/NAND现货价格持续下跌、公司月度稼动率下滑、单季营收环比负增长、扣非净利润转亏",
+      "severity": "high",
+      "evidenceRefs": [
+        "F1",
+        "F6"
+      ]
+    },
+    {
+      "title": "重资产扩产财务压力风险",
+      "mechanism": "30亿元南京二期存储项目持续资本开支，推高有息负债与财务费用，2028年才完全达产，投产前折旧持续侵蚀利润，资产负债率维持高位",
+      "observableSignal": "季度购建固定资产现金流大额流出、资产负债率持续走高、财务费用同比大增、项目延期投产公告",
+      "severity": "high",
+      "evidenceRefs": [
+        "F2",
+        "F5"
+      ]
+    },
+    {
+      "title": "盈利结构不可持续风险",
+      "mechanism": "2026上半年大额利润来自交易性金融资产浮盈，扣非主业盈利微薄，市场对周期反转预期下调，估值持续下行",
+      "observableSignal": "定期报告非经常性损益占净利润比例超50%、扣非净利润环比走弱、股价在业绩披露后放量大跌",
+      "severity": "high",
+      "evidenceRefs": [
+        "F7"
+      ]
+    },
+    {
+      "title": "行业竞争加剧价格战风险",
+      "mechanism": "长电科技、通富微电同步加码存储与先进封装产能，供给扩张加剧代工价格内卷，压缩封装服务毛利率",
+      "observableSignal": "行业平均封装报价下调、公司单季毛利率环比下滑、头部同业扩产公告密集发布",
+      "severity": "medium",
+      "evidenceRefs": [
+        "F1",
+        "F6"
+      ]
+    },
+    {
+      "title": "短期高估值回调风险",
+      "mechanism": "前期股价短期翻倍，动态市盈率处于历史高位区间，景气预期一旦松动，高位获利盘集中兑现引发大幅回撤",
+      "observableSignal": "TTM市盈率持续高于70倍、融资余额持续下降、连续多日放量大跌、龙虎榜机构净卖出",
+      "severity": "high",
+      "evidenceRefs": [
+        "F8"
+      ]
+    }
+  ],
+  "catalysts": [
+    {
+      "title": "AI算力带动存储芯片需求持续景气",
+      "expectedWindow": null,
+      "observableSignal": "DRAM/NAND现货价格连续上涨、长江存储/长鑫存储上调资本开支、公司存储封装订单排产周期拉长",
+      "evidenceRefs": [
+        "F6",
+        "F9"
+      ]
+    },
+    {
+      "title": "南京30亿存储扩产项目顺利投产释放增量",
+      "expectedWindow": null,
+      "observableSignal": "项目阶段性投产公告、南京基地稼动率显著提升、单季存储封装营收同比大幅增长",
+      "evidenceRefs": [
+        "F5"
+      ]
+    },
+    {
+      "title": "先进封装（2.5D/HBM/FCBGA）大规模放量",
+      "expectedWindow": null,
+      "observableSignal": "先进封装营收占比提升、头部AI芯片厂商批量导入公司封装方案、高毛利业务毛利率上行",
+      "evidenceRefs": [
+        "F5",
+        "F9"
+      ]
+    },
+    {
+      "title": "集成电路国产替代扶持政策落地加码",
+      "expectedWindow": null,
+      "observableSignal": "国家大基金二期新增投资、地方半导体补贴政策发布、车规芯片产业扶持文件出台",
+      "evidenceRefs": [
+        "F9"
+      ]
+    },
+    {
+      "title": "车规级封装业务客户订单持续放量",
+      "expectedWindow": null,
+      "observableSignal": "车载封装营收同比增速超30%、新增头部车企定点公告、AEC-Q100高端产品线认证落地",
+      "evidenceRefs": [
+        "F9"
+      ]
+    }
+  ],
+  "invalidationConditions": [
+    {
+      "condition": "存储芯片现货价格连续3个月单边下行，公司单季产能利用率低于75%，扣非净利润连续两个季度亏损，周期反转逻辑失效",
+      "evidenceRefs": [
+        "F1",
+        "F6"
+      ]
+    },
+    {
+      "condition": "南京30亿扩产项目延期超12个月，资产负债率突破58%，财务费用吞噬主业全部利润，产能扩张成长逻辑失效",
+      "evidenceRefs": [
+        "F2",
+        "F5"
+      ]
+    },
+    {
+      "condition": "连续两份定期报告非经常性损益占净利润比重超60%，先进封装营收占比低于18%，高成长估值逻辑失效",
+      "evidenceRefs": [
+        "F7",
+        "F5",
+        "F9"
+      ]
+    },
+    {
+      "condition": "国内封测龙头同步大幅扩产，封装代工报价持续下调，公司综合毛利率连续两季度下滑超2个百分点，行业红利逻辑失效",
+      "evidenceRefs": [
+        "F1",
+        "F6"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "ref": "F1",
+      "kind": "fact",
+      "title": "华天科技2025年度核心经营财务数据",
+      "content": "2025年度实现营业收入1721391.53万元，同比增长19.03%；归母净利润71050.86万元，同比增长15.30%；扣除非经常性损益净利润20043.93万元，2024年扣非净利润3341.94万元",
+      "source": "深圳证券交易所",
+      "sourceLevel": "L1",
+      "sourceUrl": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-03-31/1256455c-03d1-4108-a53f-61abf8163b38.PDF",
+      "publishedAt": "2026-03-31",
+      "confidence": "high"
+    },
+    {
+      "ref": "F2",
+      "kind": "fact",
+      "title": "华天科技2026年一季度资产负债情况",
+      "content": "2026年3月31日公司总资产451.51亿元，总负债235.73亿元，资产负债率52.21%；经营现金流净额4.85亿元，投资现金流净额-17.44亿元",
+      "source": "同花顺金融数据库",
+      "sourceLevel": "L2",
+      "sourceUrl": "https://basic.10jqka.com.cn/002185/finance.html",
+      "publishedAt": "2026-04-30",
+      "confidence": "high"
+    },
+    {
+      "ref": "F3",
+      "kind": "fact",
+      "title": "华天科技证券基础信息",
+      "content": "证券代码002185，证券名称华天科技，上市板块深圳证券交易所主板；主营业务集成电路封装、测试；申万行业电子-半导体-集成电路封测，纳入中证500、深股通标的",
+      "source": "深圳证券交易所、巨潮资讯网",
+      "sourceLevel": "L1",
+      "sourceUrl": "https://www.cninfo.com.cn/",
+      "publishedAt": "2007-11-20",
+      "confidence": "high"
+    },
+    {
+      "ref": "F4",
+      "kind": "fact",
+      "title": "华天科技2026年7月17日行情量价数据",
+      "content": "2026-07-17收盘价18.72元，当日跌幅10.00%，换手率15.97%，成交额100.65亿元；近三月区间涨幅49.40%，近一年区间涨幅89.67%，历史高点26.81元",
+      "source": "A股行情数据库",
+      "sourceLevel": "L2",
+      "sourceUrl": "https://quote.eastmoney.com/sz002185.html",
+      "publishedAt": "2026-07-17",
+      "confidence": "high"
+    },
+    {
+      "ref": "F5",
+      "kind": "fact",
+      "title": "南京存储封测二期扩产项目公告信息",
+      "content": "公司投资30亿元建设南京存储封测二期二阶段项目，建设期2026年6月至2028年5月，达产后年新增集成电路封装4.3亿只，预计年新增营业收入21.50亿元，年新增净利润1.26亿元",
+      "source": "深交所上市公司公告",
+      "sourceLevel": "L1",
+      "sourceUrl": "https://www.cninfo.com.cn/new/disclosure/detail?orgId=gssz0002185&announcementId=",
+      "publishedAt": "2026-05-22",
+      "confidence": "high"
+    },
+    {
+      "ref": "F6",
+      "kind": "fact",
+      "title": "华天科技存储封测行业地位事实",
+      "content": "国内存储封测市占率28%国内第一，承接长江存储40%-45%外发封测订单，承接长鑫存储六成外包封测份额；国内服务器DDR5高端存储封装份额超40%",
+      "source": "行业产业调研数据",
+      "sourceLevel": "L2",
+      "sourceUrl": "https://www.chyxx.com/industry/202607/1439285.html",
+      "publishedAt": "2026-07-14",
+      "confidence": "medium"
+    },
+    {
+      "ref": "F7",
+      "kind": "fact",
+      "title": "2026上半年业绩预告盈利结构事实",
+      "content": "公司2026上半年预计归母净利润7.5亿元-8.5亿元，其中约4.6亿元收益来自交易性金融资产浮盈与股权投资收益（非经常性损益），扣除非经常性损益净利润仅2亿元至2.8亿元",
+      "source": "上市公司业绩预告公告+机构拆解",
+      "sourceLevel": "L1",
+      "sourceUrl": "https://www.cninfo.com.cn/new/disclosure/detail?orgId=gssz0002185&announcementId=",
+      "publishedAt": "2026-07-13",
+      "confidence": "high"
+    },
+    {
+      "ref": "F8",
+      "kind": "fact",
+      "title": "2026年7月中旬估值水平事实",
+      "content": "2026年7月17日TTM市盈率76.26，行情高点阶段动态市盈率峰值突破220倍，行业封测公司平均市盈率区间30-50倍",
+      "source": "理杏仁、同花顺估值数据库",
+      "sourceLevel": "L2",
+      "sourceUrl": "https://www.lixinger.com/analytics/company/sz/002185/detail",
+      "publishedAt": "2026-07-17",
+      "confidence": "high"
+    },
+    {
+      "ref": "F9",
+      "kind": "fact",
+      "title": "公司业务覆盖赛道事实",
+      "content": "业务覆盖存储封装、先进封装（2.5D/3D、FOPLP、TSV、Bumping）、车规级芯片封装、CPO光模块封装；拥有天水、南京、昆山、马来西亚六大生产基地；完成AEC-Q100全套车规认证",
+      "source": "2025年年度报告全文",
+      "sourceLevel": "L1",
+      "sourceUrl": "https://disc.static.szse.cn/download/disc/disk03/finalpage/2026-03-31/a0209878-88e7-443c-b062-6a33047d9c98.PDF",
+      "publishedAt": "2026-03-31",
+      "confidence": "high"
+    },
+    {
+      "ref": "A1",
+      "kind": "analysis",
+      "title": "AI算力与国产存储对公司业绩驱动分析",
+      "content": "AI服务器拉动DDR5、HBM存储需求，叠加国产存储原厂扩产外包封测需求，公司存储业务作为核心基本盘具备周期向上弹性；车规封装具备弱周期属性，可对冲消费电子需求波动，但短期营收占比有限，增量释放节奏依赖车企定点落地速度，存在验证周期不确定性",
+      "evidenceRefs": [
+        "F6",
+        "F9"
+      ],
+      "basis": null,
+      "confidence": "medium"
+    },
+    {
+      "ref": "A2",
+      "kind": "analysis",
+      "title": "先进封装业务成长空间与不确定性分析",
+      "content": "公司具备全套2.5D/3D先进封装工艺，匹配AI高算力芯片封装需求，业务毛利率显著高于传统成熟封装；但客户认证周期长、产线资本投入高，短期大规模放量存在不确定性，若下游AI芯片资本开支不及预期，先进封装营收增速将明显放缓",
+      "evidenceRefs": [
+        "F5",
+        "F9"
+      ],
+      "basis": null,
+      "confidence": "medium"
+    },
+    {
+      "ref": "A3",
+      "kind": "analysis",
+      "title": "封测行业竞争格局利润挤压分析",
+      "content": "长电科技、通富微电同步加大存储、先进封装产能投放，行业中长期供给扩张；若下游需求增速无法匹配产能投放速度，封测代工价格存在下行压力，将压缩公司单位毛利水平，削弱周期反转带来的盈利弹性",
+      "evidenceRefs": [
+        "F1",
+        "F6"
+      ],
+      "basis": null,
+      "confidence": "medium"
+    }
+  ],
+  "unknowns": [
+    "2026年二季度单季扣非净利润精确拆分数据（尚未披露正式财报）",
+    "南京30亿扩产项目各年度分段投产产能与对应营收贡献精确测算值",
+    "HBM高端存储封装当前在手长期订单规模与客户锁定周期",
+    "海外马来西亚基地汇率波动对全年净利润的量化影响测算数据",
+    "国家大基金二期对公司先进封装产线潜在投资金额与落地时间"
+  ],
+  "warnings": [
+    "本研究无实时行情自动更新能力，股价、估值、换手率等行情数据仅截止2026-07-17，后续价格波动需自行核对交易所实时行情",
+    "文中行业市场份额、客户订单占比类数据来自第三方产业调研，非公司法定披露数据，存在统计口径偏差风险，仅作参考",
+    "不构成任何投资、买卖操作建议，仅客观整理可验证事实与中性逻辑推演，不承诺业绩、股价上涨确定性"
+  ]
+}

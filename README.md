@@ -2,6 +2,14 @@
 
 本地运行的 A 股交易账本、计划执行、纪律检查与 Codex 复盘工具。它不负责选股或自动下单，重点是保护本金、减少临时决策，并让账户数字可以追溯。
 
+## Vue 3 应用与 UI 基线
+
+- 所有业务页面已经统一到 Vue 3、Vite、Tailwind CSS v4 和 shadcn-vue。
+- shadcn-vue CLI 精确锁定为 `2.7.4`；`components.json`、`src/components/ui/**` 和 `src/style.css` 属于冻结区。
+- 第一阶段只允许组合官方组件、官方 Props、官方 Variant 和 neutral/new-york 官方主题，不允许业务视觉定制。
+- `npm run check:ui` 会校验冻结区哈希，并拦截原生交互控件、自定义 CSS、视觉覆盖类、非官方 Variant、普通日期/数字 Input 和业务层直接使用 reka-ui。
+- `npm run build` 会依次执行 UI 基线检查、Vue 类型检查和 Vite 生产构建；日常启动方式仍为 `npm start`。
+
 ## 第一次使用
 
 打开首页后，使用向导会先识别本机已有的持仓、成交与旧计划，不要求重复录入：
@@ -13,20 +21,6 @@
 5. 保存版本并明确确认后，计划才会进入盘中行动卡
 
 完成首次设置后，首页的“今天的闭环进度”会按盘前证据、计划确认、盘中记录和盘后复盘提示下一步。
-
-## v0.3.3 悬浮闭环助手
-
-- 首页不再重复展示“当前计划”摘要，完整计划仍在计划页和盘中行动卡中
-- 今日闭环默认收起为右侧悬浮番茄，点击番茄展开进度面板
-- 番茄支持拖动，位置只保存在当前浏览器本地
-- 悬浮助手位于最高界面层级，在各功能页面都可随时打开
-
-## v0.3.2 首页精简
-
-- 删除重复占据首页空间的初始化提示卡，使用向导继续保留在右上角
-- “今天的闭环进度”与“当前计划”改为左右各半的一行
-- 资产口径移入顶部资产图标，点击后查看详细计算
-- 数据健康移入顶部铃铛；仅在存在待处理项时显示红点
 
 ## v0.3.1 易用性更新
 
@@ -103,3 +97,58 @@ npm test
 ## 行情说明
 
 行情刷新使用第三方公开接口，可能延迟、限流或发生字段变化，只用于记录和复盘，不应替代券商行情作为下单依据。
+
+证券目录会在应用启动后检查新鲜度并后台更新；本地搜索没有命中时，会按名称或六位代码实时核验并安全补库。也可以手工执行：
+
+```powershell
+npm run stocks:update
+```
+
+相关接口：
+
+- `GET /api/stocks/search?q=名称或代码`：搜索并按需补库；
+- `GET /api/stocks/status`：查看目录数量、更新时间和是否过期；
+- `POST /api/stocks/refresh`：强制刷新全市场目录。
+
+## AI 研究接入
+
+“交易标的中心”内置两段可一键复制的提示词：第一段让任意 AI 生成 `trade-research/v1` 研究包，第二段指导能访问本机工具的 AI 预览并写入应用。
+
+本地 CLI：
+
+```powershell
+node scripts/research-import-cli.mjs schema
+node scripts/research-import-cli.mjs prompt 贵州茅台
+node scripts/research-import-cli.mjs preview .\research.json
+node scripts/research-import-cli.mjs import .\research.json --confirm
+```
+
+本地 HTTP 接口：
+
+- `GET /api/research-import/prompts`：读取提示词、JSON 结构和接口说明；
+- `POST /api/research-import/preview`：校验并预览，不写入数据；
+- `POST /api/research-import/commit`：传入 `{ "packet": {...}, "confirmed": true }` 后原子写入候选标的和证据卡。
+
+AI 研究接口不会写入或覆盖 `expectedReturn`（预期收益）和 `userMarketView`（我的市场判断）。重复导入同一研究包时，已有证据卡会自动跳过。
+
+## 通用 AI 代理 Skill
+
+项目内置可随应用一起复制的 Skill：
+
+```text
+skills/trade-discipline-assistant/
+```
+
+它让支持 `SKILL.md` 或自定义代理规则的 AI 工具按“盘前核对 → 计划确认 → 盘中记录 → 盘后复盘 → 下一交易日草稿”的闭环协助工作，并包含安全边界、接口参考和无第三方依赖的 Python 客户端。默认本地地址为 `http://127.0.0.1:3768`，也可通过 `TRADE_ASSISTANT_URL` 修改。
+
+```powershell
+python skills\trade-discipline-assistant\scripts\trade_assistant_client.py status
+python skills\trade-discipline-assistant\scripts\trade_assistant_client.py stock-search 惠科股份
+```
+
+除研究包和计划包外，外部 AI 还可以读取 `POST /api/review/export` 生成的复盘包，并通过以下代理中立接口把新报告写入历史版本：
+
+- `POST /api/analysis/import/preview`：校验 `trade-review-ai/v1`；
+- `POST /api/analysis/import`：必须传入 `confirmed: true`，不覆盖旧报告。
+
+Skill 明确禁止自动下单；券商成交、持仓和资金始终是事实源，高影响写入和计划确认必须由用户明确授权。

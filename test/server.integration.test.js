@@ -30,6 +30,45 @@ async function request(baseUrl, route, options = {}) {
   return { response, payload };
 }
 
+test("stock search reads newly listed securities from the refreshed local catalog", async t => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "trade-stock-catalog-test-"));
+  const dataDir = path.join(tempRoot, "data");
+  const reportDir = path.join(tempRoot, "reports");
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "a-share-stocks.json"), JSON.stringify([
+    { code: "001399", name: "惠科股份", market: "SZ" },
+    { code: "920267", name: "鑫汇科", market: "BJ" }
+  ]), "utf8");
+  const port = 38500 + Math.floor(Math.random() * 400);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [path.join(ROOT, "server.js")], {
+    cwd: ROOT,
+    env: { ...process.env, PORT: String(port), TRADE_DATA_DIR: dataDir, TRADE_REPORT_DIR: reportDir },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+  t.after(async () => {
+    child.kill();
+    await new Promise(resolve => child.once("exit", resolve));
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  await waitForServer(baseUrl, child);
+  let result = await request(baseUrl, `/api/stocks/search?q=${encodeURIComponent("惠科股份")}`);
+  assert.equal(result.response.status, 200, stderr);
+  assert.deepEqual(result.payload.stocks.map(stock => [stock.code, stock.name, stock.market]), [["001399", "惠科股份", "SZ"]]);
+
+  result = await request(baseUrl, "/api/stocks/search?q=920267");
+  assert.equal(result.response.status, 200, stderr);
+  assert.deepEqual(result.payload.stocks.map(stock => [stock.code, stock.name, stock.market]), [["920267", "鑫汇科", "BJ"]]);
+
+  result = await request(baseUrl, "/api/stocks/status");
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.count, 2);
+  assert.equal(result.payload.stale, false);
+});
+
 test("v0.2 API keeps plans, ledger, imports and latest review in one transaction boundary", async t => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "trade-discipline-test-"));
   const dataDir = path.join(tempRoot, "data");
@@ -228,6 +267,22 @@ test("v0.3 keeps planned assets, evidence, confirmation and discipline events tr
   assert.equal(result.payload.onboarding.completed, true);
   assert.equal(result.payload.dailyWorkflow.tasks.length, 5);
 
+  result = await request(baseUrl, "/api/review/export", { method: "POST", body: "{}" });
+  assert.equal(result.response.status, 200, stderr);
+  const reviewSnapshotId = result.payload.packet.snapshotId;
+  const externalReport = "# 外部代理纪律复盘\n\n" + "只依据复盘包区分事实、判断与结果；不承诺收益，下一交易日仅按已确认条件执行。".repeat(8);
+  const externalPacket = { schemaVersion: "trade-review-ai/v1", snapshotId: reviewSnapshotId, provider: "test-agent", content: externalReport };
+  result = await request(baseUrl, "/api/analysis/import/preview", { method: "POST", body: JSON.stringify({ packet: externalPacket }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.valid, true);
+  result = await request(baseUrl, "/api/analysis/import", { method: "POST", body: JSON.stringify({ packet: externalPacket, confirmed: true }) });
+  assert.equal(result.response.status, 201, stderr);
+  assert.equal(result.payload.analysis.source, "external-agent");
+  result = await request(baseUrl, "/api/analyses");
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.analyses[0].provider, "test-agent");
+  assert.match(result.payload.analyses[0].content, /外部代理纪律复盘/);
+
   result = await request(baseUrl, "/api/plans", { method: "PUT", body: JSON.stringify({
     id: planId, planFormat: "v0.3", planForDate: today, status: "active", validFrom: `${today}T09:15`, validUntil: `${today}T15:30`,
     accountRules: "当日最多一笔交易", changeReason: "收紧交易次数",
@@ -244,4 +299,76 @@ test("v0.3 keeps planned assets, evidence, confirmation and discipline events tr
   assert.equal(result.payload.planConfirmations.length, 1);
   assert.equal(result.payload.evidenceRecords.length, 2);
   assert.ok(result.payload.disciplineEvents.some(item => item.tradeId === result.payload.trades[0].id));
+
+  const optionalDate = "2099-12-31";
+  result = await request(baseUrl, "/api/plans", { method: "PUT", body: JSON.stringify({
+    forceNew: true, planFormat: "v0.3", planForDate: optionalDate, status: "pending_confirmation",
+    validFrom: `${optionalDate}T09:15`, validUntil: `${optionalDate}T15:30`,
+    rules: [{ code: "000001", name: "选填字段测试标的" }]
+  }) });
+  assert.equal(result.response.status, 200, stderr);
+  const optionalPlanId = result.payload.plan.id;
+  assert.equal(result.payload.plan.changeReason, "首次创建计划");
+  result = await request(baseUrl, `/api/plans/${encodeURIComponent(optionalPlanId)}/confirm`, { method: "POST", body: "{}" });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.plan.status, "active");
+  assert.equal(result.payload.confirmation.reason, "用户确认计划生效");
+});
+
+test("full-history ledger CRUD recalculates the whole account from annual detail rows", async t => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "trade-full-ledger-test-"));
+  const dataDir = path.join(tempRoot, "data");
+  const reportDir = path.join(tempRoot, "reports");
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "store.json"), JSON.stringify({
+    account: { maxPositions: 3, maxDailyLossPct: 1.2 },
+    holdings: [], trades: [], fundingLedger: [], orders: [], dailySessions: {}, analyses: [],
+    ledger: { version: 1, mode: "full-history", baseline: { availableCash: 0, realizedPnl: 0, holdings: [] }, events: [] }
+  }));
+  const port = 41000 + Math.floor(Math.random() * 1000);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [path.join(ROOT, "server.js")], {
+    cwd: ROOT,
+    env: { ...process.env, PORT: String(port), TRADE_DATA_DIR: dataDir, TRADE_REPORT_DIR: reportDir },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+  t.after(async () => {
+    child.kill();
+    await new Promise(resolve => child.once("exit", resolve));
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+  await waitForServer(baseUrl, child);
+  const today = new Date().toISOString().slice(0, 10);
+
+  let result = await request(baseUrl, "/api/funding", { method: "POST", body: JSON.stringify({ date: today, time: "09:00:00", type: "DEPOSIT", amount: 2000 }) });
+  assert.equal(result.response.status, 201, stderr);
+  const fundingId = result.payload.funding.id;
+  assert.equal(result.payload.store.account.availableCash, 2000);
+
+  result = await request(baseUrl, "/api/trades", { method: "POST", body: JSON.stringify({ date: today, time: "10:00:00", code: "000001", name: "测试股票", side: "BUY", quantity: 100, price: 10, fee: 5, reason: "测试总账" }) });
+  assert.equal(result.response.status, 201, stderr);
+  const tradeId = result.payload.trade.id;
+  assert.equal(result.payload.store.account.availableCash, 995);
+
+  result = await request(baseUrl, `/api/trades/${encodeURIComponent(tradeId)}`, { method: "PUT", body: JSON.stringify({ quantity: 100, price: 11, fee: 6, correctionReason: "修正成交价" }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.store.account.availableCash, 894);
+  assert.equal(result.payload.store.holdings[0].cost, 11.06);
+
+  result = await request(baseUrl, `/api/trades/${encodeURIComponent(tradeId)}`, { method: "DELETE", body: JSON.stringify({ reason: "删除错误成交" }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.store.account.availableCash, 2000);
+  assert.equal(result.payload.store.holdings.length, 0);
+
+  result = await request(baseUrl, `/api/funding/${encodeURIComponent(fundingId)}`, { method: "PUT", body: JSON.stringify({ date: today, time: "09:00:00", type: "DEPOSIT", amount: 2500, correctionReason: "修正入金" }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.store.account.availableCash, 2500);
+  assert.equal(result.payload.store.account.netContributions, 2500);
+
+  result = await request(baseUrl, `/api/funding/${encodeURIComponent(fundingId)}`, { method: "DELETE", body: JSON.stringify({ reason: "删除错误入金" }) });
+  assert.equal(result.response.status, 200, stderr);
+  assert.equal(result.payload.store.account.availableCash, 0);
+  assert.equal(result.payload.store.account.netContributions, 0);
 });
