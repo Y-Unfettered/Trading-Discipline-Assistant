@@ -15,4 +15,4 @@ if (Test-Path $codex) {
 } else {
     Write-Warning "Codex CLI was not found: $codex"
 }
-node server.js
+npm start

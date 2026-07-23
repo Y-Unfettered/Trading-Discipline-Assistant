@@ -60,6 +60,8 @@ def status(base_url):
         "account": dashboard.get("account"),
         "dataHealth": dashboard.get("health"),
         "discipline": dashboard.get("discipline"),
+        "disciplineV2": dashboard.get("disciplineV2"),
+        "decisionSystems": dashboard.get("v03"),
         "dailyWorkflow": dashboard.get("dailyWorkflow"),
         "plan": dashboard.get("plan"),
         "nextTradingDate": dashboard.get("nextTradingDate"),
@@ -83,12 +85,42 @@ def import_packet(base_url, kind, path, confirmed):
     return request(base_url, "POST", route, body, timeout=60)
 
 
+def decision_packet(base_url, kind, path, confirmed):
+    packet = load_packet(path)
+    bases = {
+        "discipline": "/api/discipline-assessments",
+        "influence": "/api/influence-assessments",
+        "probability": "/api/probability-reports",
+    }
+    route = bases[kind] if confirmed else f"{bases[kind]}/preview"
+    body = {"input": packet}
+    if confirmed:
+        body["confirmed"] = True
+    return request(base_url, "POST", route, body, timeout=60)
+
+
+def controlled_packet(base_url, kind, path, confirmed):
+    packet = load_packet(path)
+    routes = {
+        "information-source": ("/api/information-sources/preview", "/api/information-sources"),
+        "information-event": ("/api/information-events/preview", "/api/information-events"),
+        "company-relation": ("/api/company-relations/preview", "/api/company-relations"),
+    }
+    preview, commit = routes[kind]
+    body = {"input": packet}
+    if confirmed:
+        body["confirmed"] = True
+    return request(base_url, "POST", commit if confirmed else preview, body, timeout=60)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description="交易纪律助手通用 AI 代理客户端")
     parser.add_argument("--base-url", default=DEFAULT_URL)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     sub.add_parser("snapshot")
+    sub.add_parser("rulebooks")
+    sub.add_parser("information-sources")
     search = sub.add_parser("stock-search")
     search.add_argument("query")
     sub.add_parser("stock-status")
@@ -104,6 +136,21 @@ def build_parser():
         command = sub.add_parser(kind)
         command.add_argument("file")
         command.add_argument("--confirm", action="store_true")
+    for kind in ("discipline", "influence", "probability"):
+        command = sub.add_parser(kind)
+        command.add_argument("file")
+        command.add_argument("--confirm", action="store_true")
+    resolve = sub.add_parser("probability-resolve")
+    resolve.add_argument("report_id")
+    resolve.add_argument("file", help="包含 actualOutcome、resolvedAt 和 actualData 的 JSON")
+    resolve.add_argument("--confirm", action="store_true", required=True)
+    for kind in ("information-source", "information-event", "company-relation"):
+        command = sub.add_parser(kind)
+        command.add_argument("file")
+        command.add_argument("--confirm", action="store_true")
+    collect = sub.add_parser("information-run")
+    collect.add_argument("source_id", nargs="?", default="")
+    collect.add_argument("--confirm", action="store_true", required=True)
     return parser
 
 
@@ -115,6 +162,10 @@ def main():
             result = status(base)
         elif args.command == "snapshot":
             result = request(base, "GET", "/api/store")
+        elif args.command == "rulebooks":
+            result = request(base, "GET", "/api/rulebooks")
+        elif args.command == "information-sources":
+            result = request(base, "GET", "/api/information-sources")
         elif args.command == "stock-search":
             query = urllib.parse.quote(args.query)
             result = request(base, "GET", f"/api/stocks/search?q={query}")
@@ -133,6 +184,21 @@ def main():
         elif args.command == "research-prompts":
             target = urllib.parse.quote(args.target)
             result = request(base, "GET", f"/api/research-import/prompts?target={target}")
+        elif args.command in ("discipline", "influence", "probability"):
+            result = decision_packet(base, args.command, args.file, args.confirm)
+        elif args.command == "probability-resolve":
+            report_id = urllib.parse.quote(args.report_id)
+            result = request(base, "POST", f"/api/probability-reports/{report_id}/resolve", {
+                "confirmed": True,
+                "resolution": load_packet(args.file),
+            })
+        elif args.command in ("information-source", "information-event", "company-relation"):
+            result = controlled_packet(base, args.command, args.file, args.confirm)
+        elif args.command == "information-run":
+            body = {"confirmed": True}
+            if args.source_id:
+                body["sourceId"] = args.source_id
+            result = request(base, "POST", "/api/information-collection/run", body, timeout=120)
         else:
             result = import_packet(base, args.command, args.file, args.confirm)
         dump(result)

@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-07-22T15:30:00+08:00",
+  "asset": {
+    "code": "000001",
+    "name": "示例证券"
+  },
+  "horizon": "5d",
+  "outcomeDefinition": {
+    "benchmark": "000300",
+    "bull": "5个交易日相对基准收益大于2%",
+    "bear": "5个交易日相对基准收益小于-2%"
+  },
+  "signals": [
+    { "name": "市场状态", "direction": 0.2, "reliability": 0.7, "weight": 1, "evidenceRefs": ["M1"] },
+    { "name": "个股相对强度", "direction": 0.5, "reliability": 0.6, "weight": 1, "evidenceRefs": ["T1"] },
+    { "name": "公司影响因子", "direction": -0.3, "reliability": 0.8, "weight": 1, "evidenceRefs": ["I1"] }
+  ],
+  "calibration": {
+    "modelId": "",
+    "resolvedSampleSize": 0
+  }
+}

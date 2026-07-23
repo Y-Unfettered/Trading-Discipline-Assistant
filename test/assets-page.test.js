@@ -22,6 +22,9 @@ test("asset center opens candidate create and edit flows in dialogs and opens as
   assert.match(page, /evidenceDialogOpen\.value = false; resetEvidence\(\); emit\('refresh'\)/);
   assert.match(page, /@click="openAssetDetail\(asset\)"/);
   assert.match(page, /<AssetDetailView v-if="selectedAsset"/);
+  assert.match(page, /新增公司传导关系/);
+  assert.match(page, /\/api\/company-relations/);
+  assert.match(page, /支持或反证必须引用事实卡/);
   assert.match(page, /<Dialog v-model:open="aiDialogOpen">/);
   assert.match(page, /line-clamp-3/);
   assert.match(page, /asset\.aiResearchSummary \|\| '暂无 AI 简介/);
@@ -41,6 +44,9 @@ test("asset details distinguish publication time from capture time and expose so
   assert.match(detail, /上游输入/);
   assert.match(detail, /下游需求/);
   assert.match(detail, /severityVariant/);
+  assert.match(detail, /公司传导关系图/);
+  assert.match(detail, /行业概念不能替代公司资格/);
+  assert.match(detail, /supportedRelationCount/);
 });
 
 test("global workspace keeps the header outside scrolling content and offers back to top", () => {

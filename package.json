@@ -4,14 +4,17 @@
   "private": true,
   "description": "本地部署的个人交易计划、证据、执行与纪律复盘助手",
   "scripts": {
-    "start": "node server.js",
-    "dev": "concurrently -k \"node server.js\" \"vite\"",
+    "start": "node scripts/start-local-stack.mjs",
+    "dev": "concurrently -k \"node scripts/start-local-stack.mjs\" \"vite\"",
+    "app:start": "node server.js",
+    "newsnow:install": "cross-env SKIP_INSTALL_SIMPLE_GIT_HOOKS=1 pnpm --dir vendor/newsnow install --frozen-lockfile",
+    "newsnow:build": "pnpm --dir vendor/newsnow run build",
     "stocks:update": "python scripts/update-stock-db.py",
     "research:cli": "node scripts/research-import-cli.mjs",
     "check:ui": "node scripts/check-ui-baseline.mjs",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json",
     "build": "npm run check:ui && npm run typecheck && vite build",
-    "test": "npm run check:ui && node --test"
+    "test": "npm run check:ui && node --test \"test/*.test.js\""
   },
   "engines": {
     "node": ">=22.5"
@@ -20,6 +23,7 @@
     "@tanstack/vue-table": "^8.21.3",
     "@vee-validate/zod": "^4.15.1",
     "@vueuse/core": "^14.3.0",
+    "cheerio": "^1.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dompurify": "^3.4.12",

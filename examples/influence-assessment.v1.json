@@ -1,0 +1,39 @@
+{
+  "eventId": "example-policy-event-1",
+  "assetCode": "000001",
+  "source": {
+    "type": "regulator_or_government"
+  },
+  "information": {
+    "credibility": 5,
+    "originalAvailable": true,
+    "independentCorroborationCount": 1,
+    "contradiction": 0
+  },
+  "event": {
+    "direction": 1,
+    "authority": 5,
+    "enforceability": 4,
+    "specificity": 4,
+    "budget": 4,
+    "novelty": 4,
+    "scope": 4,
+    "duration": 4,
+    "timing": 3,
+    "timeDecay": 100
+  },
+  "market": {
+    "pricedIn": 1
+  },
+  "transmission": [
+    { "key": "demand_created", "score": 4, "critical": true, "evidenceRefs": ["F1"] },
+    { "key": "budget_funded", "score": 4, "critical": true, "evidenceRefs": ["F2"] },
+    { "key": "product_match", "score": 4, "critical": true, "evidenceRefs": ["F3"] },
+    { "key": "procurement_route", "score": 3, "critical": true, "evidenceRefs": ["F4"] },
+    { "key": "company_eligibility", "score": 4, "critical": true, "evidenceRefs": ["F5"] },
+    { "key": "access_history", "score": 3, "critical": false, "evidenceRefs": ["F6"] },
+    { "key": "capacity_delivery", "score": 4, "critical": false, "evidenceRefs": ["F7"] },
+    { "key": "economic_materiality", "score": 3, "critical": true, "evidenceRefs": ["F8"] },
+    { "key": "timing_recognition", "score": 3, "critical": false, "evidenceRefs": ["F9"] }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "tradeId": "example-trade-1",
+  "date": "2026-07-22",
+  "assetCode": "000001",
+  "riskEffect": "increase",
+  "emergencyDeRisk": false,
+  "plan": {
+    "active": true,
+    "invalidated": false,
+    "triggerDefined": true,
+    "riskExitDefined": true
+  },
+  "evidence": {
+    "reasonRecorded": true,
+    "factsLinked": true,
+    "thesisStated": true,
+    "thesisStatus": "valid",
+    "scenarioDefined": true
+  },
+  "execution": {
+    "actionAllowed": true,
+    "triggerSatisfied": true,
+    "withinTolerance": true,
+    "timely": true
+  },
+  "risk": {
+    "positionWithinLimit": true,
+    "tradeRiskWithinLimit": true,
+    "stopNotLoosened": true,
+    "dailyLimitRespected": true,
+    "loserRiskNotExpanded": true
+  },
+  "adjustment": {
+    "deviationVerified": true,
+    "emotionControlled": true,
+    "noRevengeSequence": true,
+    "frequencyWithinRule": true
+  },
+  "record": {
+    "tradeComplete": true,
+    "rationaleComplete": true,
+    "emotionComplete": true,
+    "reviewComplete": true
+  },
+  "outcome": {
+    "pnl": -100,
+    "note": "结果只记录，不进入纪律分"
+  }
+}

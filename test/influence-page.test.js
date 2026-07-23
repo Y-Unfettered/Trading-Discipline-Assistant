@@ -1,0 +1,52 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const app = fs.readFileSync(path.join(__dirname, "../src/App.vue"), "utf8");
+const page = fs.readFileSync(path.join(__dirname, "../src/pages/InfluencePage.vue"), "utf8");
+
+test("information impact center is navigable and keeps evidence gates visible", () => {
+  assert.match(app, /InfluencePage/);
+  assert.match(app, /page: 'influence'/);
+  assert.match(page, /资讯影响中心/);
+  assert.match(page, /影响分不是涨跌概率/);
+  assert.match(page, /原文链接/);
+  assert.match(page, /预览去重/);
+  assert.match(page, /公司九段传导链/);
+  assert.match(page, /stageEvidence/);
+  assert.match(page, /关键节点缺证据时不会生成公司影响分/);
+  assert.match(page, /自动采集来源/);
+  assert.match(page, /资讯库/);
+  assert.match(page, /DataTable/);
+  assert.match(page, /最新资讯/);
+  assert.match(page, /智能优先/);
+  assert.match(page, /AI 对当前持仓的影响初评/);
+  assert.match(page, /holdingRelevance/);
+  assert.match(page, /AI 持仓影响清单/);
+  assert.match(page, /确认合理/);
+  assert.match(page, /标记不准确/);
+  assert.match(page, /AI自动完成，无需你确认/);
+  assert.match(page, /holding-impact-confirmations/);
+  assert.doesNotMatch(page, />评估公司影响<\/Button>/);
+  assert.match(page, /当前持仓相关资讯优先/);
+  assert.match(page, /AI 仅完成部分资讯，默认保留时间顺序/);
+  assert.doesNotMatch(page, /v-for="event in events"/);
+  assert.match(page, /NewsNow.*开源聚合服务/);
+  assert.match(page, /接入推荐 NewsNow 来源/);
+  assert.match(page, /本地保存的资讯内容/);
+  assert.match(page, /采集运行面板/);
+  assert.match(page, /grid items-start/);
+  assert.match(page, /sourceCardHeight \? \{ height:/);
+  assert.match(page, /ref="monitorCardRef"/);
+  assert.match(page, /ResizeObserver/);
+  assert.match(page, /min-h-0 max-h-\[540px\] flex-1 space-y-2 overflow-y-auto pr-1 xl:max-h-none/);
+  assert.match(page, /仅标题线索/);
+  assert.match(page, /\/api\/information-runtime/);
+  assert.match(page, /\/api\/information-content\/run/);
+  assert.match(page, /\/api\/information-collection\/run/);
+  assert.match(page, /sec_edgar_submissions/);
+  assert.match(page, /付费 X 接口在后端和界面中均被阻止|X 已从可选来源中移除/);
+});

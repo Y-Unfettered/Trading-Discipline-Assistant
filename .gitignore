@@ -1,9 +1,14 @@
 # Dependencies and runtime output
 node_modules/
+vendor/newsnow/node_modules/
+vendor/newsnow/dist/
+vendor/newsnow/.data/
 logs/
 *.log
 *.tmp
 *.tsbuildinfo
+newsnow-*.zip
+.tmp-newsnow-*/
 
 # Personal trading data. Keep these files local only.
 data/

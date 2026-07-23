@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowLeft, BrainCircuit, ExternalLink, FileText, Network, Pencil, Plus, ShieldAlert, Sparkles, Target } from 'lucide-vue-next'
+import { ArrowLeft, BrainCircuit, ExternalLink, FileText, Network, Newspaper, Pencil, Plus, ShieldAlert, Sparkles, Target } from 'lucide-vue-next'
 import PageHeading from '@/components/app/PageHeading.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 
-const props = defineProps<{ asset: Record<string, any>; evidence: Record<string, any>[] }>()
-const emit = defineEmits<{ back: []; edit: [asset: Record<string, any>]; addEvidence: [code: string] }>()
+const props = defineProps<{ asset: Record<string, any>; evidence: Record<string, any>[]; relations: Record<string, any>[]; informationEvents: Record<string, any>[] }>()
+const emit = defineEmits<{ back: []; edit: [asset: Record<string, any>]; addEvidence: [code: string]; addRelation: [code: string]; openInfluence: [query: string] }>()
 
 type TaggedItem = { title: string; details: string[]; tags: { label: string; value: string }[] }
 
@@ -61,6 +61,20 @@ const relatedEvidence = computed(() => props.evidence
 const facts = computed(() => relatedEvidence.value.filter(item => item.kind === 'fact'))
 const interpretations = computed(() => relatedEvidence.value.filter(item => item.kind !== 'fact'))
 const evidenceById = computed(() => new Map(props.evidence.map(item => [item.id, item])))
+const relationStages = [
+  { key: 'demand_created', label: '真实需求' }, { key: 'budget_funded', label: '预算资金' }, { key: 'product_match', label: '产品匹配' },
+  { key: 'procurement_route', label: '采购路径' }, { key: 'company_eligibility', label: '公司资格' }, { key: 'access_history', label: '历史准入' },
+  { key: 'capacity_delivery', label: '产能交付' }, { key: 'economic_materiality', label: '经济重要性' }, { key: 'timing_recognition', label: '确认时点' },
+]
+const latestRelations = computed(() => {
+  const map = new Map<string, any>()
+  for (const relation of props.relations.filter(item => String(item.assetCode) === String(props.asset.code)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))) {
+    if (!map.has(relation.stage)) map.set(relation.stage, relation)
+  }
+  return relationStages.map(stage => ({ ...stage, relation: map.get(stage.key) || null }))
+})
+const supportedRelationCount = computed(() => latestRelations.value.filter(item => item.relation?.status === 'supported').length)
+const relationStatusLabel = (value?: string) => ({ supported: '有证据', unknown: '待核验', contradicted: '已反证' } as Record<string, string>)[value || ''] || '未建立'
 
 const researchFields = computed(() => [
   { label: '基本面', value: props.asset.fundamentalView },
@@ -79,6 +93,45 @@ const invalidations = computed(() => taggedLines(props.asset.invalidationConditi
 function citedFacts(item: Record<string, any>) {
   return (item.evidenceIds || []).map((id: string) => evidenceById.value.get(id)).filter(Boolean)
 }
+
+const directInformationEvents = computed(() => props.informationEvents
+  .filter(item => (item.assetCodes || []).includes(String(props.asset.code)))
+  .sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt))))
+
+const holdingRelatedInformationEvents = computed(() => {
+  const assetCode = String(props.asset.code)
+  const directIds = new Set(directInformationEvents.value.map(e => e.id))
+  return props.informationEvents
+    .filter(item => {
+      if (directIds.has(item.id)) return false
+      const holdingRel = item.aiEnrichment?.holdingRelevance || []
+      return holdingRel.some((h: any) => String(h.assetCode) === assetCode)
+    })
+    .sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt)))
+})
+
+const industryInformationEvents = computed(() => {
+  const industry = String(props.asset.industry || '').trim().toLowerCase()
+  if (!industry) return []
+  const directIds = new Set([...directInformationEvents.value.map(e => e.id), ...holdingRelatedInformationEvents.value.map(e => e.id)])
+  return props.informationEvents
+    .filter(item => {
+      if (directIds.has(item.id)) return false
+      return (item.industryTags || []).some((tag: string) => {
+        const tagLower = tag.toLowerCase()
+        return tagLower.includes(industry) || industry.includes(tagLower)
+      })
+    })
+    .sort((a, b) => String(b.publishedAt || b.createdAt).localeCompare(String(a.publishedAt || a.createdAt)))
+})
+
+const aiProcessedCount = computed(() => {
+  const allIds = new Set([...directInformationEvents.value.map(e => e.id), ...holdingRelatedInformationEvents.value.map(e => e.id), ...industryInformationEvents.value.map(e => e.id)])
+  return [...allIds].filter(id => {
+    const event = props.informationEvents.find(e => e.id === id)
+    return event?.aiEnrichment?.ruleVersion
+  }).length
+})
 </script>
 
 <template>
@@ -86,6 +139,7 @@ function citedFacts(item: Record<string, any>) {
     <template #actions>
       <Button variant="outline" @click="emit('back')"><ArrowLeft class="size-4" />返回标的中心</Button>
       <Button variant="outline" @click="emit('addEvidence', String(asset.code))"><Plus class="size-4" />补充证据</Button>
+      <Button variant="outline" @click="emit('addRelation', String(asset.code))"><Network class="size-4" />公司关系</Button>
       <Button v-if="asset.candidateId" @click="emit('edit', asset)"><Pencil class="size-4" />编辑标的</Button>
     </template>
   </PageHeading>
@@ -99,12 +153,28 @@ function citedFacts(item: Record<string, any>) {
       <div><p class="text-xs text-muted-foreground">交易市场</p><p class="mt-1 font-semibold">{{ asset.market || '未填写' }}</p></div>
       <div><p class="text-xs text-muted-foreground">研究截至</p><p class="mt-1 font-semibold">{{ asset.researchAsOf || '未记录' }}</p></div>
       <div><p class="text-xs text-muted-foreground">相关证据</p><p class="mt-1 font-semibold">{{ relatedEvidence.length }} 张</p></div>
+      <div><p class="text-xs text-muted-foreground">直接关联资讯</p><p class="mt-1 font-semibold">{{ directInformationEvents.length }} 条</p></div>
+      <div><p class="text-xs text-muted-foreground">持仓相关资讯</p><p class="mt-1 font-semibold">{{ holdingRelatedInformationEvents.length }} 条</p></div>
+      <div><p class="text-xs text-muted-foreground">行业相关资讯</p><p class="mt-1 font-semibold">{{ industryInformationEvents.length }} 条</p></div>
+      <div><p class="text-xs text-muted-foreground">AI 已整理</p><p class="mt-1 font-semibold">{{ aiProcessedCount }} 条</p></div>
       <template v-if="asset.holding">
         <div><p class="text-xs text-muted-foreground">持仓数量</p><p class="mt-1 font-semibold">{{ asset.quantity ?? '未记录' }}</p></div>
         <div><p class="text-xs text-muted-foreground">可用数量</p><p class="mt-1 font-semibold">{{ asset.availableQuantity ?? '未记录' }}</p></div>
         <div><p class="text-xs text-muted-foreground">持仓成本</p><p class="mt-1 font-semibold">{{ asset.cost ?? '未记录' }}</p></div>
         <div><p class="text-xs text-muted-foreground">最新记录价格</p><p class="mt-1 font-semibold">{{ asset.lastPrice ?? '未记录' }}</p></div>
       </template>
+    </CardContent>
+  </Card>
+
+  <Card class="mt-4 shadow-none">
+    <CardHeader><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle>公司传导关系图</CardTitle><CardDescription>从真实需求到收入确认共九个节点；行业概念不能替代公司资格、采购路径和经济重要性。</CardDescription></div><Badge variant="outline">{{ supportedRelationCount }} / 9 已有证据</Badge></div></CardHeader>
+    <CardContent class="grid gap-3 md:grid-cols-3">
+      <div v-for="item in latestRelations" :key="item.key" class="rounded-lg border p-4">
+        <div class="flex items-center justify-between gap-2"><p class="font-semibold">{{ item.label }}</p><Badge :variant="item.relation?.status === 'contradicted' ? 'destructive' : item.relation?.status === 'supported' ? 'secondary' : 'outline'">{{ relationStatusLabel(item.relation?.status) }}</Badge></div>
+        <p class="mt-2 text-sm leading-6">{{ item.relation?.title || '尚未建立结论' }}</p>
+        <p v-if="item.relation?.details" class="mt-1 text-sm leading-6 text-muted-foreground">{{ item.relation.details }}</p>
+        <div v-if="item.relation" class="mt-3 flex flex-wrap gap-2"><Badge v-if="item.relation.score != null" variant="outline">强度 {{ item.relation.score }} / 5</Badge><Badge v-for="evidenceId in item.relation.evidenceIds" :key="evidenceId" variant="outline">{{ evidenceById.get(evidenceId)?.externalRef || '事实依据' }}</Badge></div>
+      </div>
     </CardContent>
   </Card>
 
@@ -174,6 +244,95 @@ function citedFacts(item: Record<string, any>) {
       <CardContent class="space-y-4"><div v-for="item in invalidations" :key="item.title" class="border-l-2 border-red-200 pl-4 dark:border-red-900/50"><p class="font-semibold">{{ item.title }}</p><p v-for="detail in item.details" :key="detail" class="mt-2 text-sm leading-6 text-muted-foreground">{{ detail }}</p><div class="mt-2 flex flex-wrap gap-2"><Badge v-for="tag in item.tags" :key="`${tag.label}-${tag.value}`" variant="outline">{{ tag.label }}：{{ tag.value }}</Badge></div></div></CardContent>
     </Card>
   </section>
+
+  <Card v-if="directInformationEvents.length || holdingRelatedInformationEvents.length || industryInformationEvents.length" class="mt-4 shadow-none">
+    <CardHeader>
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="flex items-start gap-3">
+          <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-foreground"><Newspaper class="size-4" /></span>
+          <div>
+            <CardTitle>相关资讯</CardTitle>
+            <CardDescription>直接关联 {{ directInformationEvents.length }} 条 · 持仓相关 {{ holdingRelatedInformationEvents.length }} 条 · 行业相关 {{ industryInformationEvents.length }} 条</CardDescription>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" @click="emit('openInfluence', asset.industry || asset.code)">
+          <ExternalLink class="size-4" />查看全部
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent class="space-y-4">
+      <div v-if="directInformationEvents.length">
+        <p class="mb-2 text-sm font-semibold text-muted-foreground">直接关联</p>
+        <div class="space-y-2">
+          <article v-for="item in directInformationEvents.slice(0, 5)" :key="item.id" class="rounded-lg border p-3">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <h3 class="font-semibold leading-6">{{ item.title }}</h3>
+              <Badge v-if="item.aiEnrichment?.attentionPriorityScore != null" :variant="item.aiEnrichment.attentionPriorityScore >= 60 ? 'destructive' : item.aiEnrichment.attentionPriorityScore >= 40 ? 'secondary' : 'outline'">
+                优先级 {{ item.aiEnrichment.attentionPriorityScore }}
+              </Badge>
+            </div>
+            <p class="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{{ item.aiEnrichment?.shortSummary || item.summary }}</p>
+            <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <div class="flex flex-wrap gap-2">
+                <Badge v-for="tag in item.industryTags?.slice(0, 3)" :key="tag" variant="outline">{{ tag }}</Badge>
+              </div>
+              <span>{{ displayTime(item.publishedAt) }} · {{ item.sourceName }}</span>
+            </div>
+          </article>
+        </div>
+        <p v-if="directInformationEvents.length > 5" class="mt-2 text-sm text-muted-foreground">还有 {{ directInformationEvents.length - 5 }} 条直接关联资讯</p>
+      </div>
+      <Separator v-if="directInformationEvents.length && holdingRelatedInformationEvents.length" />
+      <div v-if="holdingRelatedInformationEvents.length">
+        <p class="mb-2 text-sm font-semibold text-muted-foreground">持仓相关（AI 整理认定）</p>
+        <div class="space-y-2">
+          <article v-for="item in holdingRelatedInformationEvents.slice(0, 5)" :key="item.id" class="rounded-lg border border-amber-200/50 bg-amber-50/30 p-3 dark:border-amber-900/30 dark:bg-amber-950/10">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <h3 class="font-semibold leading-6">{{ item.title }}</h3>
+              <div class="flex flex-wrap gap-2">
+                <Badge v-if="item.aiEnrichment?.holdingRelevance?.length" variant="outline">
+                  {{ item.aiEnrichment.holdingRelevance.find((h: any) => String(h.assetCode) === String(asset.code))?.relation || '持仓相关' }}
+                </Badge>
+                <Badge v-if="item.aiEnrichment?.attentionPriorityScore != null" :variant="item.aiEnrichment.attentionPriorityScore >= 60 ? 'destructive' : item.aiEnrichment.attentionPriorityScore >= 40 ? 'secondary' : 'outline'">
+                  优先级 {{ item.aiEnrichment.attentionPriorityScore }}
+                </Badge>
+              </div>
+            </div>
+            <p class="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{{ item.aiEnrichment?.shortSummary || item.summary }}</p>
+            <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <div class="flex flex-wrap gap-2">
+                <Badge v-for="tag in item.industryTags?.slice(0, 3)" :key="tag" variant="outline">{{ tag }}</Badge>
+              </div>
+              <span>{{ displayTime(item.publishedAt) }} · {{ item.sourceName }}</span>
+            </div>
+          </article>
+        </div>
+        <p v-if="holdingRelatedInformationEvents.length > 5" class="mt-2 text-sm text-muted-foreground">还有 {{ holdingRelatedInformationEvents.length - 5 }} 条持仓相关资讯</p>
+      </div>
+      <Separator v-if="(directInformationEvents.length || holdingRelatedInformationEvents.length) && industryInformationEvents.length" />
+      <div v-if="industryInformationEvents.length">
+        <p class="mb-2 text-sm font-semibold text-muted-foreground">行业相关（{{ asset.industry || '行业未填写' }}）</p>
+        <div class="space-y-2">
+          <article v-for="item in industryInformationEvents.slice(0, 5)" :key="item.id" class="rounded-lg border bg-muted/30 p-3">
+            <div class="flex flex-wrap items-start justify-between gap-2">
+              <h3 class="font-semibold leading-6">{{ item.title }}</h3>
+              <Badge v-if="item.aiEnrichment?.attentionPriorityScore != null" :variant="item.aiEnrichment.attentionPriorityScore >= 60 ? 'destructive' : item.aiEnrichment.attentionPriorityScore >= 40 ? 'secondary' : 'outline'">
+                优先级 {{ item.aiEnrichment.attentionPriorityScore }}
+              </Badge>
+            </div>
+            <p class="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{{ item.aiEnrichment?.shortSummary || item.summary }}</p>
+            <div class="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <div class="flex flex-wrap gap-2">
+                <Badge v-for="tag in item.industryTags?.slice(0, 3)" :key="tag" variant="outline">{{ tag }}</Badge>
+              </div>
+              <span>{{ displayTime(item.publishedAt) }} · {{ item.sourceName }}</span>
+            </div>
+          </article>
+        </div>
+        <p v-if="industryInformationEvents.length > 5" class="mt-2 text-sm text-muted-foreground">还有 {{ industryInformationEvents.length - 5 }} 条行业相关资讯</p>
+      </div>
+    </CardContent>
+  </Card>
 
   <Card class="mt-4 shadow-none">
     <CardHeader><CardTitle>事实证据</CardTitle><CardDescription>按消息发布时间排序；F1 是证据编号，L1-L4 是来源等级</CardDescription></CardHeader>

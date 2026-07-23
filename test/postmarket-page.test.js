@@ -23,3 +23,13 @@ test("behavior evidence is summarized on the page and edited in a dialog", () =>
   assert.match(page, /正文在弹窗中查看和编辑/);
   assert.doesNotMatch(page, /<CardContent><form class="space-y-4" @submit\.prevent="saveReview">/);
 });
+
+test("postmarket review finalizes each trade and separates process from outcome", () => {
+  assert.match(page, /逐笔纪律评估/);
+  assert.match(page, /过程结论/);
+  assert.match(page, /结果记录/);
+  assert.match(page, /不进入纪律分/);
+  assert.match(page, /\/discipline-preview/);
+  assert.match(page, /\/api\/discipline-assessments/);
+  assert.match(page, /确认并保存正式评分/);
+});

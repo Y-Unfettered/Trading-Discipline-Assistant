@@ -40,6 +40,8 @@ python scripts/trade_assistant_client.py status
 6. **盘后复盘**：先对账、补费用和收盘行情，再分析决策质量、纪律事件、风险暴露和下一次纠正规则。
 7. **进入下一轮**：从当日复盘生成下一交易日草稿；下一交易日盘前重新核对，不沿用未经复核的事实。
 
+正式纪律评分优先使用 `/api/discipline-assessments/preview` 补齐缺口，再经用户确认保存。资讯AI整理必须遵循 `/api/information-processing/instructions`：逐一核对当前持仓并自动输出相关度、影响初评分、传导路径、证据状态和缺失证据；只有后端标记需要确认的少数结果才交给用户点击确认。`/api/influence-assessments/preview` 仅作为高级证据评估工具；公司关键节点缺失时不能把行业利好写成公司确定受益。概率研报在 `calibrationStatus=cold_start` 时只能展示证据相对权重，不能把它改写成上涨或下跌概率。
+
 ## 使用任意 AI 代理
 
 优先走代理中立的预览/确认接口，而不是调用 Codex 专属按钮：

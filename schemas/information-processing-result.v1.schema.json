@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InformationProcessingResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "inputHash",
+    "shortSummary",
+    "keyFacts",
+    "topicTags",
+    "industryTags",
+    "assetCodes",
+    "eventType",
+    "direction",
+    "attentionPriorityScore",
+    "eventStrength",
+    "holdingRelevance",
+    "rankingReason",
+    "confidence"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "inputHash": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "shortSummary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "keyFacts": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+    },
+    "topicTags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 40 }
+    },
+    "industryTags": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 1, "maxLength": 40 }
+    },
+    "assetCodes": {
+      "type": "array",
+      "maxItems": 20,
+      "items": { "type": "string", "pattern": "^[0-9]{6}$" }
+    },
+    "eventType": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "direction": { "enum": ["positive", "negative", "neutral", "unknown"] },
+    "attentionPriorityScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "eventStrength": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "assetImpacts": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetCode", "score", "reason"],
+        "properties": {
+          "assetCode": { "type": "string", "pattern": "^[0-9]{6}$" },
+          "score": { "type": "integer", "minimum": -100, "maximum": 100 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      }
+    },
+    "holdingRelevance": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetCode", "assetName", "relation", "direction", "relevanceScore", "impactScore", "impactTimeframe", "assessmentStatus", "confidence", "reason", "transmissionPath", "keyEvidence", "missingEvidence", "evidenceBasis"],
+        "properties": {
+          "assetCode": { "type": "string", "pattern": "^[0-9]{6}$" },
+          "assetName": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "relation": { "enum": ["direct", "industry", "upstream", "downstream", "commodity", "macro"] },
+          "direction": { "enum": ["positive", "negative", "neutral", "unknown"] },
+          "relevanceScore": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "impactScore": { "type": "integer", "minimum": -100, "maximum": 100 },
+          "impactTimeframe": { "enum": ["immediate", "short_term", "medium_term", "long_term", "unknown"] },
+          "assessmentStatus": { "enum": ["supported", "provisional", "insufficient"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "transmissionPath": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+          },
+          "keyEvidence": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+          },
+          "missingEvidence": {
+            "type": "array",
+            "maxItems": 8,
+            "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+          },
+          "requiresUserConfirmation": { "type": "boolean", "readOnly": true },
+          "confirmationReason": { "type": ["string", "null"], "maxLength": 300, "readOnly": true },
+          "evidenceBasis": { "enum": ["article_explicit", "industry_chain", "macro_chain"] }
+        }
+      }
+    },
+    "rankingReason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

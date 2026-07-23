@@ -9,6 +9,11 @@ const { spawn } = require("node:child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 
+function localDateKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
 async function waitForServer(baseUrl, child) {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (child.exitCode != null) throw new Error(`server exited with ${child.exitCode}`);
@@ -91,7 +96,7 @@ test("v0.2 API keeps plans, ledger, imports and latest review in one transaction
   });
 
   await waitForServer(baseUrl, child);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
 
   let result = await request(baseUrl, "/api/account", { method: "PUT", body: JSON.stringify({ availableCash: 10000, brokerTotalAssets: "", todayPnl: "" }) });
   assert.equal(result.response.status, 200, stderr);
@@ -192,7 +197,7 @@ test("v0.3 keeps planned assets, evidence, confirmation and discipline events tr
   });
 
   await waitForServer(baseUrl, child);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
   let result = await request(baseUrl, "/api/account", { method: "PUT", body: JSON.stringify({ availableCash: 10000, brokerTotalAssets: "", todayPnl: "" }) });
   assert.equal(result.response.status, 200, stderr);
 
@@ -340,7 +345,7 @@ test("full-history ledger CRUD recalculates the whole account from annual detail
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
   await waitForServer(baseUrl, child);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
 
   let result = await request(baseUrl, "/api/funding", { method: "POST", body: JSON.stringify({ date: today, time: "09:00:00", type: "DEPOSIT", amount: 2000 }) });
   assert.equal(result.response.status, 201, stderr);

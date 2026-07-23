@@ -26,6 +26,70 @@ const {
   buildResearchPrompt,
   buildWritePrompt
 } = require("./lib/research-import");
+const {
+  RULEBOOK_VERSION: DISCIPLINE_RULEBOOK_VERSION,
+  DIMENSIONS: DISCIPLINE_DIMENSIONS,
+  evaluateDiscipline: evaluateDisciplineV2,
+  summarizeDiscipline: summarizeDisciplineV2
+} = require("./lib/discipline-engine");
+const {
+  RULEBOOK_VERSION: INFLUENCE_RULEBOOK_VERSION,
+  SOURCE_DEFAULTS: INFLUENCE_SOURCE_DEFAULTS,
+  EVENT_WEIGHTS: INFLUENCE_EVENT_WEIGHTS,
+  REQUIRED_TRANSMISSION_STAGES,
+  evaluateInfluence
+} = require("./lib/influence-engine");
+const {
+  SCHEMA_VERSION: PROBABILITY_SCHEMA_VERSION,
+  buildProbabilityReport,
+  resolveForecast
+} = require("./lib/probability-engine");
+const { BAYESIAN_MODEL_VERSION } = require("./lib/bayesian-engine");
+const { summarizeProbabilityCalibration } = require("./lib/probability-calibration");
+const {
+  SOURCE_SCHEMA_VERSION: INFORMATION_SOURCE_SCHEMA_VERSION,
+  SUPPORTED_ADAPTERS: INFORMATION_SOURCE_ADAPTERS,
+  DEFAULT_NEWSNOW_BASE_URL,
+  LEGACY_PUBLIC_NEWSNOW_BASE_URLS,
+  NEWSNOW_RECOMMENDED_SOURCES,
+  normalizeInformationSource,
+  nextRandomRunAt,
+  collectInformationSource
+} = require("./lib/information-collector");
+const {
+  ARTICLE_CONTENT_SCHEMA_VERSION,
+  fetchArticleContent
+} = require("./lib/article-content");
+const {
+  contentHostKey,
+  selectInformationContentBatch
+} = require("./lib/information-content-scheduler");
+const {
+  EXTRACTED_COLLECTIONS,
+  hydrateStoreCollections,
+  shouldCreateBackup,
+  shouldKeepStateSnapshot,
+  splitStoreCollections
+} = require("./lib/state-storage");
+const {
+  backfillDecisionContexts,
+  canonicalAssetId,
+  decisionContextForTrade,
+  ensureAssetRegistry
+} = require("./lib/asset-registry");
+const {
+  ensureInformationClusters
+} = require("./lib/information-clustering");
+const {
+  PROCESSING_SCHEMA_VERSION: INFORMATION_PROCESSING_SCHEMA_VERSION,
+  PROCESSING_RULEBOOK_VERSION: INFORMATION_PROCESSING_RULEBOOK_VERSION,
+  agentInstructions: informationProcessingInstructions,
+  eventInputHash,
+  normalizeProcessingResult,
+  pendingInformationEvents,
+  processingState,
+  processingTaskItem
+} = require("./lib/information-processing");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -119,6 +183,50 @@ function migrateStore(store) {
   store.plannedAssets ||= [];
   store.evidenceRecords ||= [];
   store.disciplineEvents ||= [];
+  store.disciplineAssessments ||= [];
+  store.influenceAssessments ||= [];
+  store.informationEvents ||= [];
+  store.informationSources ||= [];
+  store.informationProcessingRuns ||= [];
+  store.informationContentRuns ||= [];
+  store.informationImpactConfirmations ||= [];
+  store.informationEventClusters ||= [];
+  store.informationEvidencePromotions ||= [];
+  for (const event of store.informationEvents) {
+    event.aiProcessingStatus = processingState(event);
+    if (event.aiProcessingStatus === "completed") event.aiProcessingError = null;
+    event.contentStatus ||= "pending";
+    event.contentAttemptCount ||= 0;
+  }
+  for (const source of store.informationSources) {
+    if (source.adapter === "x_recent_search") {
+      source.enabled = false;
+      source.nextRunAt = null;
+      source.costPolicy = "paid_blocked";
+      source.lastError ||= "零费用模式已阻止付费 X 来源";
+    } else {
+      source.costPolicy ||= "free_official";
+    }
+    if (source.adapter === "newsnow") {
+      const recommended = NEWSNOW_RECOMMENDED_SOURCES.find(item => item.key === source.config?.sourceId);
+      source.config ||= {};
+      const configuredBaseUrl = cleanText(source.config.baseUrl).replace(/\/+$/, "");
+      if (!configuredBaseUrl || LEGACY_PUBLIC_NEWSNOW_BASE_URLS.has(configuredBaseUrl)) {
+        source.config.baseUrl = DEFAULT_NEWSNOW_BASE_URL;
+      }
+      source.config.contentMode ||= recommended?.contentMode || "source_page";
+    }
+  }
+  for (const event of store.informationEvents) {
+    const source = store.informationSources.find(item => item.id === event.collectorSourceId);
+    event.contentPolicy ||= event.contentMode || source?.config?.contentMode || "source_page";
+    event.contentNeedsUpgrade = event.contentNeedsUpgrade === true;
+  }
+  store.informationCollectionRuns ||= [];
+  store.companyRelations ||= [];
+  store.assets ||= [];
+  store.probabilityReports ||= [];
+  store.forecastResolutions ||= [];
   store.planConfirmations ||= [];
   store.onboarding ||= {
     version: "0.3.3",
@@ -169,6 +277,9 @@ function migrateStore(store) {
     });
   }
   ensureLedger(store);
+  ensureAssetRegistry(store, store.updatedAt || new Date().toISOString());
+  ensureInformationClusters(store, store.updatedAt || new Date().toISOString());
+  backfillDecisionContexts(store);
   return store;
 }
 
@@ -194,7 +305,41 @@ function openDatabase() {
       payload TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS state_collection_records (
+      collection TEXT NOT NULL,
+      record_key TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (collection, record_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_state_collection_position
+      ON state_collection_records (collection, position);
+    CREATE TABLE IF NOT EXISTS information_content (
+      event_id TEXT PRIMARY KEY,
+      schema_version TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      final_url TEXT,
+      title TEXT,
+      author TEXT,
+      published_at TEXT,
+      content_text TEXT,
+      content_html TEXT,
+      excerpt TEXT,
+      content_hash TEXT,
+      fetch_status TEXT NOT NULL,
+      http_status INTEGER,
+      error TEXT,
+      content_origin TEXT,
+      content_kind TEXT,
+      fetched_at TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
+  const informationContentColumns = new Set(database.prepare("PRAGMA table_info(information_content)").all().map(column => column.name));
+  if (!informationContentColumns.has("content_origin")) database.exec("ALTER TABLE information_content ADD COLUMN content_origin TEXT");
+  if (!informationContentColumns.has("content_kind")) database.exec("ALTER TABLE information_content ADD COLUMN content_kind TEXT");
   const existing = database.prepare("SELECT revision FROM app_state WHERE id = 1").get();
   if (!existing) {
     const seed = fs.existsSync(STORE_FILE)
@@ -227,12 +372,113 @@ function attachRevision(store, revision) {
 }
 
 function loadStore() {
-  const row = openDatabase().prepare("SELECT revision, payload FROM app_state WHERE id = 1").get();
-  return attachRevision(migrateStore(JSON.parse(row.payload)), row.revision);
+  const db = openDatabase();
+  const row = db.prepare("SELECT revision, payload FROM app_state WHERE id = 1").get();
+  const core = JSON.parse(row.payload);
+  const marker = Array.isArray(core.__extractedCollections) ? core.__extractedCollections : [];
+  const rowsByCollection = new Map();
+  if (marker.length) {
+    const query = db.prepare("SELECT collection, position, payload FROM state_collection_records WHERE collection = ? ORDER BY position ASC");
+    for (const name of marker) rowsByCollection.set(name, query.all(name));
+  }
+  return attachRevision(migrateStore(hydrateStoreCollections(core, rowsByCollection)), row.revision);
+}
+
+function mapInformationContentRow(row) {
+  if (!row) return null;
+  return {
+    eventId: row.event_id,
+    schemaVersion: row.schema_version,
+    sourceUrl: row.source_url,
+    finalUrl: row.final_url,
+    title: row.title,
+    author: row.author,
+    publishedAt: row.published_at,
+    contentText: row.content_text,
+    contentHtml: row.content_html,
+    excerpt: row.excerpt,
+    contentHash: row.content_hash,
+    status: row.fetch_status,
+    httpStatus: row.http_status,
+    error: row.error,
+    contentOrigin: row.content_origin || (row.content_text ? "source_page" : null),
+    contentKind: row.content_kind || (row.fetch_status === "complete" ? "article" : row.content_text ? "substantial_summary" : row.fetch_status === "headline_only" ? "headline_only" : null),
+    fetchedAt: row.fetched_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function getInformationContent(eventId) {
+  const row = openDatabase().prepare("SELECT * FROM information_content WHERE event_id = ?").get(eventId);
+  return mapInformationContentRow(row);
+}
+
+function portfolioHoldingsSnapshot(store) {
+  return (store.holdings || []).map(holding => ({ assetCode: holding.code, assetName: holding.name }));
+}
+
+function buildInformationProcessingTaskItem(event, holdings = []) {
+  const content = getInformationContent(event.id);
+  return processingTaskItem({ ...event, contentText: content?.contentText || null }, { holdings });
+}
+
+function upsertInformationContent(eventId, data) {
+  const now = new Date().toISOString();
+  openDatabase().prepare(`
+    INSERT INTO information_content (
+      event_id, schema_version, source_url, final_url, title, author, published_at,
+      content_text, content_html, excerpt, content_hash, fetch_status, http_status,
+      error, content_origin, content_kind, fetched_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(event_id) DO UPDATE SET
+      schema_version = excluded.schema_version,
+      source_url = excluded.source_url,
+      final_url = excluded.final_url,
+      title = excluded.title,
+      author = excluded.author,
+      published_at = excluded.published_at,
+      content_text = excluded.content_text,
+      content_html = excluded.content_html,
+      excerpt = excluded.excerpt,
+      content_hash = excluded.content_hash,
+      fetch_status = excluded.fetch_status,
+      http_status = excluded.http_status,
+      error = excluded.error,
+      content_origin = excluded.content_origin,
+      content_kind = excluded.content_kind,
+      fetched_at = excluded.fetched_at,
+      updated_at = excluded.updated_at
+  `).run(
+    eventId,
+    data.schemaVersion || ARTICLE_CONTENT_SCHEMA_VERSION,
+    data.sourceUrl || "",
+    data.finalUrl || null,
+    data.title || null,
+    data.author || null,
+    data.publishedAt || null,
+    data.contentText || null,
+    data.contentHtml || null,
+    data.excerpt || null,
+    data.contentHash || null,
+    data.status || "failed",
+    data.httpStatus == null ? null : Number(data.httpStatus),
+    data.error || null,
+    data.contentOrigin || null,
+    data.contentKind || null,
+    data.fetchedAt || null,
+    now
+  );
+  return getInformationContent(eventId);
 }
 
 function backupStore(reason = "write") {
   if (!fs.existsSync(STORE_FILE)) return null;
+  const existing = fs.readdirSync(BACKUP_DIR)
+    .filter(name => name.endsWith(".json"))
+    .map(name => ({ name, file: path.join(BACKUP_DIR, name), stat: fs.statSync(path.join(BACKUP_DIR, name)) }))
+    .sort((a, b) => Math.max(b.stat.mtimeMs, b.stat.birthtimeMs) - Math.max(a.stat.mtimeMs, a.stat.birthtimeMs));
+  const newestBackupAt = existing[0] ? new Date(Math.max(existing[0].stat.mtimeMs, existing[0].stat.birthtimeMs)).toISOString() : null;
+  if (!shouldCreateBackup({ reason, newestBackupAt })) return null;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const safeReason = String(reason).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 40) || "write";
   const file = path.join(BACKUP_DIR, `${stamp}-${safeReason}.json`);
@@ -242,7 +488,7 @@ function backupStore(reason = "write") {
     .filter(name => name.endsWith(".json"))
     .map(name => ({ name, file: path.join(BACKUP_DIR, name), mtime: Math.max(fs.statSync(path.join(BACKUP_DIR, name)).mtimeMs, fs.statSync(path.join(BACKUP_DIR, name)).birthtimeMs) }))
     .sort((a, b) => b.mtime - a.mtime);
-  const retention = Number(loadStoreSafe()?.settings?.backupRetention || 60);
+  const retention = Math.max(10, Math.min(30, Number(loadStoreSafe()?.settings?.backupRetention || 20)));
   files.slice(Math.max(10, retention)).forEach(item => fs.unlinkSync(item.file));
   return file;
 }
@@ -254,10 +500,14 @@ function loadStoreSafe() {
 function saveStore(store, reason = "write") {
   backupStore(reason);
   rebuildLedgerProjection(store);
-  store.schemaVersion = 3;
+  ensureAssetRegistry(store);
+  ensureInformationClusters(store);
+  backfillDecisionContexts(store);
+  store.schemaVersion = 4;
   store.updatedAt = new Date().toISOString();
   const db = openDatabase();
-  const payload = JSON.stringify(store);
+  const { core, collections } = splitStoreCollections(store);
+  const payload = JSON.stringify(core);
   db.exec("BEGIN IMMEDIATE");
   try {
     const current = db.prepare("SELECT revision FROM app_state WHERE id = 1").get();
@@ -266,11 +516,40 @@ function saveStore(store, reason = "write") {
       throw new Error("数据已被其他操作更新，请重新加载后再试");
     }
     const nextRevision = Number(current.revision) + 1;
+    const existingQuery = db.prepare("SELECT record_key, content_hash FROM state_collection_records WHERE collection = ?");
+    const upsertRecord = db.prepare(`
+      INSERT INTO state_collection_records (collection, record_key, position, payload, content_hash, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(collection, record_key) DO UPDATE SET
+        position = excluded.position,
+        payload = excluded.payload,
+        content_hash = excluded.content_hash,
+        updated_at = excluded.updated_at
+      WHERE state_collection_records.content_hash <> excluded.content_hash
+         OR state_collection_records.position <> excluded.position
+    `);
+    const deleteRecord = db.prepare("DELETE FROM state_collection_records WHERE collection = ? AND record_key = ?");
+    for (const name of EXTRACTED_COLLECTIONS) {
+      const records = collections.get(name) || [];
+      const existingRecords = new Map(existingQuery.all(name).map(item => [String(item.record_key), item.content_hash]));
+      const nextKeys = new Set(records.map(item => item.recordKey));
+      for (const item of records) {
+        if (existingRecords.get(item.recordKey) !== item.contentHash) {
+          upsertRecord.run(name, item.recordKey, item.position, item.payload, item.contentHash, store.updatedAt);
+        } else {
+          db.prepare("UPDATE state_collection_records SET position = ? WHERE collection = ? AND record_key = ? AND position <> ?")
+            .run(item.position, name, item.recordKey, item.position);
+        }
+      }
+      for (const key of existingRecords.keys()) if (!nextKeys.has(key)) deleteRecord.run(name, key);
+    }
     db.prepare("UPDATE app_state SET revision = ?, payload = ?, updated_at = ? WHERE id = 1")
       .run(nextRevision, payload, store.updatedAt);
-    db.prepare("INSERT INTO state_versions (revision, reason, payload, created_at) VALUES (?, ?, ?, ?)")
-      .run(nextRevision, String(reason), payload, store.updatedAt);
-    db.prepare("DELETE FROM state_versions WHERE id NOT IN (SELECT id FROM state_versions ORDER BY id DESC LIMIT 180)").run();
+    if (shouldKeepStateSnapshot(nextRevision, reason)) {
+      db.prepare("INSERT INTO state_versions (revision, reason, payload, created_at) VALUES (?, ?, ?, ?)")
+        .run(nextRevision, String(reason), payload, store.updatedAt);
+    }
+    db.prepare("DELETE FROM state_versions WHERE id NOT IN (SELECT id FROM state_versions ORDER BY id DESC LIMIT 24)").run();
     db.exec("COMMIT");
     attachRevision(store, nextRevision);
   } catch (error) {
@@ -655,6 +934,76 @@ function nextEvidenceExternalRef(store, kind, assetCode) {
   return `${prefix}${highest + 1}`;
 }
 
+function promoteConfirmedInformationImpact(store, event, confirmation, holdingImpact) {
+  if (confirmation.decision !== "confirmed") return null;
+  store.informationEvidencePromotions ||= [];
+  const existing = store.informationEvidencePromotions.find(item =>
+    item.confirmationId === confirmation.id
+    || (item.eventId === event.id && item.assetCode === confirmation.assetCode && item.inputHash === confirmation.inputHash && item.ruleVersion === confirmation.ruleVersion)
+  );
+  if (existing) {
+    confirmation.promotionId = existing.id;
+    return existing;
+  }
+  const createdAt = new Date().toISOString();
+  const shared = store.informationEvidencePromotions.find(item =>
+    item.clusterId && item.clusterId === event.clusterId && item.assetCode === confirmation.assetCode && item.factEvidenceId
+  );
+  let fact = shared ? store.evidenceRecords.find(item => item.id === shared.factEvidenceId) : null;
+  if (!fact) {
+    fact = normalizeEvidence({
+      kind: "fact",
+      title: `资讯事实：${event.title}`.slice(0, 180),
+      content: cleanText(event.aiEnrichment?.shortSummary || event.summary || event.title),
+      assetCode: confirmation.assetCode,
+      source: event.sourceName,
+      sourceLevel: event.sourceType,
+      sourceUrl: event.sourceUrl,
+      publishedAt: event.publishedAt,
+      externalRef: nextEvidenceExternalRef(store, "fact", confirmation.assetCode),
+      importFingerprint: `information-cluster:${event.clusterId || event.id}`,
+      confidence: "medium"
+    }, store);
+    store.evidenceRecords.push(fact);
+  }
+  const transmission = Array.isArray(holdingImpact.transmissionPath)
+    ? holdingImpact.transmissionPath.join(" → ")
+    : cleanText(holdingImpact.transmissionPath);
+  const analysis = normalizeEvidence({
+    kind: "analysis",
+    title: `持仓影响：${confirmation.assetName || confirmation.assetCode}`,
+    content: [
+      cleanText(holdingImpact.reason),
+      transmission && `传导路径：${transmission}`,
+      holdingImpact.impactTimeframe && `影响周期：${holdingImpact.impactTimeframe}`,
+      Number.isFinite(Number(holdingImpact.impactScore)) && `影响分：${Number(holdingImpact.impactScore)}`
+    ].filter(Boolean).join("\n") || "用户已确认该资讯与当前持仓存在影响关系，具体强度仍需后续事实验证。",
+    assetCode: confirmation.assetCode,
+    evidenceIds: [fact.id],
+    externalRef: nextEvidenceExternalRef(store, "analysis", confirmation.assetCode),
+    importFingerprint: `information-impact:${confirmation.id}`,
+    confidence: holdingImpact.confidence || "medium"
+  }, store);
+  store.evidenceRecords.push(analysis);
+  const promotion = {
+    id: `information-evidence-promotion-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    confirmationId: confirmation.id,
+    eventId: event.id,
+    clusterId: event.clusterId || null,
+    assetId: confirmation.assetId || canonicalAssetId(confirmation.assetCode),
+    assetCode: confirmation.assetCode,
+    inputHash: confirmation.inputHash,
+    ruleVersion: confirmation.ruleVersion,
+    factEvidenceId: fact.id,
+    analysisEvidenceId: analysis.id,
+    createdAt
+  };
+  store.informationEvidencePromotions.push(promotion);
+  confirmation.promotionId = promotion.id;
+  event.promotedEvidenceIds = [...new Set([...(event.promotedEvidenceIds || []), fact.id, analysis.id])];
+  return promotion;
+}
+
 function formatResearchItems(items, mode) {
   return (items || []).map(item => {
     const details = mode === "risk"
@@ -812,6 +1161,9 @@ function normalizeTrade(input) {
   if (!/^\d{6}$/.test(code)) throw new Error("证券代码必须是6位数字");
   if (!Number.isInteger(quantity) || !(quantity > 0) || !Number.isFinite(price) || !(price > 0)) throw new Error("数量必须是正整数，价格必须大于0");
   if (input.fee !== "" && input.fee != null && (!Number.isFinite(Number(input.fee)) || Number(input.fee) < 0)) throw new Error("费用必须是大于或等于0的数字");
+  for (const [label, value] of [["成交后仓位", input.actualPositionPct], ["实际风险", input.actualRiskPct]]) {
+    if (value !== "" && value != null && (!Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 100)) throw new Error(`${label}必须是0到100之间的数字`);
+  }
   return {
     id: input.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     date: input.date || localDateKey(),
@@ -831,6 +1183,19 @@ function normalizeTrade(input) {
     planBeforeTrade: Boolean(input.premarketPlanExists),
     executionStatus: ["followed", "delayed", "unplanned"].includes(input.executionStatus) ? input.executionStatus : (input.planFollowed ? "followed" : "unplanned"),
     emotion: String(input.emotion || "").trim(),
+    tradeIntent: ["open", "add", "reduce", "exit", "t_buy", "t_sell"].includes(input.tradeIntent) ? input.tradeIntent : (side === "BUY" ? "add" : "reduce"),
+    riskEffect: ["increase", "reduce", "neutral"].includes(input.riskEffect) ? input.riskEffect : (side === "BUY" ? "increase" : "reduce"),
+    thesisStatus: ["valid", "uncertain", "invalidated", "unknown"].includes(input.thesisStatus) ? input.thesisStatus : "unknown",
+    trendState: ["up", "sideways", "down", "rapid_down", "unknown"].includes(input.trendState) ? input.trendState : "unknown",
+    triggerSatisfied: input.triggerSatisfied === true || input.triggerSatisfied === false ? input.triggerSatisfied : null,
+    withinTolerance: input.withinTolerance === true || input.withinTolerance === false ? input.withinTolerance : null,
+    stopChange: ["unchanged", "tightened", "loosened", "not_applicable"].includes(input.stopChange) ? input.stopChange : "not_applicable",
+    factsLinked: Boolean(input.factsLinked),
+    newInfoVerified: Boolean(input.newInfoVerified),
+    emotionState: ["calm", "hesitant", "fomo", "panic", "revenge", "recover", "other"].includes(input.emotionState) ? input.emotionState : "other",
+    actualPositionPct: input.actualPositionPct === "" || input.actualPositionPct == null ? null : Number(input.actualPositionPct),
+    actualRiskPct: input.actualRiskPct === "" || input.actualRiskPct == null ? null : Number(input.actualRiskPct),
+    evidenceIds: Array.isArray(input.evidenceIds) ? [...new Set(input.evidenceIds.map(cleanText).filter(Boolean))] : [],
     planId: input.planId || null,
     planVersion: input.planVersion == null ? null : Number(input.planVersion),
     planSnapshotKey: input.planSnapshotKey || null,
@@ -1032,6 +1397,673 @@ function evaluateDiscipline(store, trade, plan, rule) {
     add("EMOTIONAL_TRADE", "warning", "疑似情绪驱动交易", `${trade.reason} ${trade.emotion}`.trim());
   }
   return events;
+}
+
+function planSnapshotForTrade(store, trade) {
+  const version = (store.planVersions || []).find(item => item.id === trade.planId && Number(item.version) === Number(trade.planVersion));
+  const current = (store.plans || []).find(item => item.id === trade.planId && Number(item.version) === Number(trade.planVersion));
+  return version || current || null;
+}
+
+function ruleForTrade(plan, trade) {
+  return (plan?.rules || []).find(rule => String(rule.code) === String(trade.code)) || null;
+}
+
+function actionAllowedByRule(trade, rule) {
+  if (!rule) return false;
+  const allowed = cleanText(rule.allowedActions || `${rule.sell || ""} ${rule.stop || ""}`);
+  if (!allowed) return null;
+  return trade.side === "BUY"
+    ? /买|建仓|加仓|低吸|做T|T\+0|BUY/i.test(allowed)
+    : /卖|减仓|退出|止损|止盈|做T|T\+0|SELL/i.test(allowed);
+}
+
+function calculatedTradeRiskContext(store, trade, rule) {
+  const account = accountSummary(store);
+  const totalAssets = Number(account.totalAssets || 0);
+  const holding = (store.holdings || []).find(item => String(item.code) === String(trade.code));
+  const currentQuantity = Number(holding?.quantity || 0);
+  const projectedQuantity = trade.side === "BUY"
+    ? currentQuantity + Number(trade.quantity || 0)
+    : Math.max(0, currentQuantity - Number(trade.quantity || 0));
+  const calculatedPositionPct = totalAssets > 0 ? projectedQuantity * Number(trade.price || 0) / totalAssets * 100 : null;
+  const actualPositionPct = trade.actualPositionPct != null && Number.isFinite(Number(trade.actualPositionPct)) ? Number(trade.actualPositionPct) : calculatedPositionPct;
+  const stopPrice = Number(rule?.stopPrice || 0);
+  const calculatedRiskPct = trade.riskEffect === "increase" && totalAssets > 0 && stopPrice > 0
+    ? Math.max(0, Number(trade.price) - stopPrice) * Number(trade.quantity) / totalAssets * 100
+    : trade.riskEffect === "reduce" ? 0 : null;
+  const actualRiskPct = trade.actualRiskPct != null && Number.isFinite(Number(trade.actualRiskPct)) ? Number(trade.actualRiskPct) : calculatedRiskPct;
+  const maxPositionPct = Number(rule?.maxPositionPct || 0);
+  const maxRiskPct = Number(rule?.maxRiskPct || 0);
+  const dailyLossLimit = totalAssets * Number(store.account?.maxDailyLossPct || 0) / 100;
+  const dailyLimitBreached = dailyLossLimit > 0 && Number(store.account?.todayPnl || 0) < 0 && Math.abs(Number(store.account.todayPnl)) >= dailyLossLimit;
+  return {
+    actualPositionPct,
+    actualRiskPct,
+    maxPositionPct: maxPositionPct || null,
+    maxRiskPct: maxRiskPct || null,
+    positionWithinLimit: actualPositionPct == null || !maxPositionPct ? null : actualPositionPct <= maxPositionPct + 0.01,
+    tradeRiskWithinLimit: actualRiskPct == null || !maxRiskPct ? null : actualRiskPct <= maxRiskPct + 0.001,
+    dailyLimitRespected: trade.riskEffect !== "increase" || !dailyLimitBreached
+  };
+}
+
+function buildTradeDisciplineInput(store, trade, overrides = {}) {
+  const plan = planSnapshotForTrade(store, trade);
+  const rule = ruleForTrade(plan, trade);
+  const merged = { ...trade, ...overrides };
+  const risk = calculatedTradeRiskContext(store, merged, rule);
+  const emotional = new Set(["fomo", "panic", "revenge", "recover"]);
+  const sameDayPrior = (store.trades || []).filter(item => item.date === merged.date && item.id !== merged.id && String(item.time) <= String(merged.time));
+  const hasThreeScenarios = Boolean(cleanText(rule?.baseScenario) && cleanText(rule?.bullScenario) && cleanText(rule?.bearScenario));
+  const reviewComplete = (overrides.reviewComplete === true || overrides.record?.reviewComplete === true)
+    && Boolean(cleanText(overrides.reviewNote || overrides.review?.note))
+    && Boolean(cleanText(overrides.correctionRule || overrides.review?.correctionRule));
+  return {
+    tradeId: merged.id || null,
+    date: merged.date,
+    assetCode: merged.code,
+    assessmentPhase: reviewComplete ? "postmarket" : "intraday",
+    tradeIntent: merged.tradeIntent,
+    riskEffect: merged.riskEffect,
+    emergencyDeRisk: merged.emergencyDeRisk === true,
+    plan: {
+      id: merged.planId || null,
+      version: merged.planVersion || null,
+      active: Boolean(merged.premarketPlanExists && plan && rule),
+      invalidated: Boolean(merged.planInvalidatedAtTrade),
+      triggerDefined: Boolean(cleanText(rule?.triggerCondition || rule?.wait)),
+      riskExitDefined: Boolean(cleanText(rule?.exitCondition || rule?.stop || rule?.invalidationCondition))
+    },
+    evidence: {
+      reasonRecorded: Boolean(cleanText(merged.reason)),
+      factsLinked: merged.factsLinked === true || (merged.evidenceIds || []).length > 0,
+      evidenceIds: merged.evidenceIds || [],
+      thesisStated: Boolean(merged.thesisStatus && merged.thesisStatus !== "unknown"),
+      thesisStatus: merged.thesisStatus || "unknown",
+      trendState: merged.trendState || "unknown",
+      scenarioDefined: hasThreeScenarios
+    },
+    execution: {
+      actionAllowed: actionAllowedByRule(merged, rule),
+      triggerSatisfied: merged.triggerSatisfied === true || merged.triggerSatisfied === false ? merged.triggerSatisfied : null,
+      withinTolerance: merged.withinTolerance === true || merged.withinTolerance === false ? merged.withinTolerance : null,
+      timely: merged.executionStatus === "delayed" ? false : merged.executionStatus === "followed" ? true : null
+    },
+    risk: {
+      ...risk,
+      stopNotLoosened: merged.stopChange === "loosened" ? false : ["unchanged", "tightened", "not_applicable"].includes(merged.stopChange) ? true : null,
+      loserRiskNotExpanded: merged.riskEffect !== "increase" || merged.tradeIntent !== "add" || merged.lossPositionAtTrade !== true
+    },
+    adjustment: {
+      deviationVerified: merged.executionStatus === "followed" || merged.newInfoVerified === true,
+      emotionControlled: !emotional.has(merged.emotionState),
+      noRevengeSequence: merged.emotionState !== "revenge",
+      frequencyWithinRule: sameDayPrior.length < 3
+    },
+    record: {
+      tradeComplete: Boolean(merged.date && merged.time && merged.code && merged.side && Number(merged.quantity) > 0 && Number(merged.price) > 0),
+      rationaleComplete: Boolean(cleanText(merged.reason) && cleanText(merged.ruleTrigger || rule?.triggerCondition)),
+      emotionComplete: Boolean(merged.emotionState),
+      reviewComplete
+    },
+    outcome: {
+      pnl: merged.realizedPnlEstimate ?? null,
+      fee: merged.fee ?? null,
+      note: cleanText(overrides.outcomeNote)
+    },
+    review: {
+      note: cleanText(overrides.reviewNote),
+      correctionRule: cleanText(overrides.correctionRule)
+    }
+  };
+}
+
+function disciplineV2Dashboard(store) {
+  const today = localDateKey();
+  const assessments = [...(store.disciplineAssessments || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const latestByTrade = new Map();
+  for (const assessment of assessments) if (assessment.tradeId) latestByTrade.set(String(assessment.tradeId), assessment);
+  const todayTrades = (store.trades || []).filter(item => item.date === today);
+  const todayAssessments = todayTrades.map(trade => latestByTrade.get(String(trade.id))).filter(Boolean);
+  const finalToday = todayAssessments.filter(item => Number.isFinite(item.result?.score));
+  const rolling = [...latestByTrade.values()].filter(item => Number.isFinite(item.result?.score)).slice(-20);
+  const rollingSummary = summarizeDisciplineV2(rolling.map(item => ({ ...item.result, riskUnits: item.input?.riskEffect === "increase" ? 2 : 1 })));
+  const todaySummary = summarizeDisciplineV2(finalToday.map(item => ({ ...item.result, riskUnits: item.input?.riskEffect === "increase" ? 2 : 1 })));
+  const pendingTrades = todayTrades.filter(trade => !Number.isFinite(latestByTrade.get(String(trade.id))?.result?.score));
+  const critical = todayAssessments.filter(item => (item.result?.events || []).some(event => event.severity === "critical"));
+  const repeated = rollingSummary.repeatedEvents?.[0];
+  const worst = [...rolling].sort((a, b) => Number(a.result.score) - Number(b.result.score))[0];
+  const trainingTarget = repeated
+    ? `接下来5次新增风险决策，消除重复问题 ${repeated.code}；未满足对应条件时不新增风险。`
+    : worst?.result?.correction || (pendingTrades.length ? `先完成今天 ${pendingTrades.length} 笔成交的正式纪律评估。` : "继续按已确认触发和风险边界执行。")
+  return {
+    todayTradeCount: todayTrades.length,
+    pendingAssessmentCount: pendingTrades.length,
+    criticalAssessmentCount: critical.length,
+    assessedCount: finalToday.length,
+    todayScore: todaySummary.score,
+    rolling20Score: rollingSummary.score,
+    rolling20Count: rolling.length,
+    repeatedEvents: rollingSummary.repeatedEvents || [],
+    trainingTarget,
+    pendingTradeIds: pendingTrades.map(item => item.id)
+  };
+}
+
+const INFORMATION_SOURCE_TYPES = new Set([
+  "exchange_filing", "regulator_or_government", "procurement_or_award", "company_official",
+  "audited_or_official_statistics", "established_media", "industry_media",
+  "social_verified_identity", "social_unverified", "anonymous"
+]);
+
+function normalizeInformationEvent(input = {}, existing = null) {
+  const title = cleanText(input.title || existing?.title);
+  const summary = cleanText(input.summary || existing?.summary);
+  const sourceName = cleanText(input.sourceName || existing?.sourceName);
+  const sourceUrl = cleanText(input.sourceUrl || existing?.sourceUrl);
+  const publishedAt = cleanText(input.publishedAt || existing?.publishedAt);
+  if (!title) throw new Error("资讯事件必须填写标题");
+  if (!summary) throw new Error("资讯事件必须填写原文事实摘要");
+  if (!sourceName) throw new Error("资讯事件必须填写来源主体");
+  if (!/^https?:\/\//i.test(sourceUrl)) throw new Error("资讯事件必须填写可核验的原文链接");
+  if (!publishedAt) throw new Error("资讯事件必须填写发布时间");
+  const sourceType = INFORMATION_SOURCE_TYPES.has(input.sourceType) ? input.sourceType : (existing?.sourceType || "industry_media");
+  const externalId = cleanText(input.externalId || existing?.externalId);
+  const collectorSourceId = cleanText(input.collectorSourceId || existing?.collectorSourceId);
+  const originalHash = contentHash(externalId && collectorSourceId
+    ? { collectorSourceId, externalId }
+    : { title, summary, sourceUrl, publishedAt });
+  const now = new Date().toISOString();
+  return {
+    ...(existing || {}),
+    id: existing?.id || `information-event-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title,
+    summary,
+    sourceName,
+    sourceUrl,
+    sourceType,
+    publishedAt,
+    collectedAt: existing?.collectedAt || now,
+    assetCodes: Array.isArray(input.assetCodes) ? [...new Set(input.assetCodes.map(cleanText).filter(code => /^\d{6}$/.test(code)))] : (existing?.assetCodes || []),
+    industryTags: Array.isArray(input.industryTags) ? [...new Set(input.industryTags.map(cleanText).filter(Boolean))] : (existing?.industryTags || []),
+    status: ["new", "assessing", "reviewed", "archived"].includes(input.status) ? input.status : (existing?.status || "new"),
+    originalHash,
+    externalId: externalId || null,
+    collectorSourceId: collectorSourceId || null,
+    rawFingerprint: cleanText(input.rawFingerprint || existing?.rawFingerprint) || null,
+    rank: Number.isFinite(Number(input.rank)) ? Number(input.rank) : (existing?.rank ?? null),
+    hotValue: cleanText(input.hotValue || existing?.hotValue) || null,
+    lastSeenAt: cleanText(input.lastSeenAt || existing?.lastSeenAt) || now,
+    contentStatus: cleanText(input.contentStatus || existing?.contentStatus) || "pending",
+    contentHash: cleanText(input.contentHash || existing?.contentHash) || null,
+    contentFetchedAt: cleanText(input.contentFetchedAt || existing?.contentFetchedAt) || null,
+    contentAttemptCount: Number(input.contentAttemptCount ?? existing?.contentAttemptCount ?? 0),
+    contentRetryAt: cleanText(input.contentRetryAt || existing?.contentRetryAt) || null,
+    contentError: cleanText(input.contentError || existing?.contentError) || null,
+    contentPolicy: cleanText(input.contentMode || input.contentPolicy || existing?.contentPolicy) || "source_page",
+    contentOrigin: cleanText(input.contentOrigin || existing?.contentOrigin) || null,
+    contentKind: cleanText(input.contentKind || existing?.contentKind) || null,
+    contentNeedsUpgrade: input.contentNeedsUpgrade == null ? Boolean(existing?.contentNeedsUpgrade) : input.contentNeedsUpgrade === true,
+    collectionMethod: collectorSourceId ? "automatic_adapter" : (existing?.collectionMethod || "manual"),
+    assessmentIds: existing?.assessmentIds || [],
+    updatedAt: now,
+    createdAt: existing?.createdAt || now
+  };
+}
+
+function canonicalInformationUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|spm$|from$|source$|ref$)/i.test(key)) url.searchParams.delete(key);
+    }
+    url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+    if (url.pathname === "/" && !url.search) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+const COMPANY_RELATION_STATUSES = new Set(["supported", "unknown", "contradicted"]);
+function normalizeCompanyRelation(input = {}, store) {
+  const assetCode = cleanText(input.assetCode);
+  const stage = cleanText(input.stage);
+  const status = COMPANY_RELATION_STATUSES.has(input.status) ? input.status : "unknown";
+  const title = cleanText(input.title);
+  const details = cleanText(input.details);
+  if (!/^\d{6}$/.test(assetCode)) throw new Error("公司关系必须关联六位证券代码");
+  if (!REQUIRED_TRANSMISSION_STAGES.includes(stage)) throw new Error("公司关系节点不合法");
+  if (!title) throw new Error("公司关系必须填写结论标题");
+  const evidenceIds = Array.isArray(input.evidenceIds) ? [...new Set(input.evidenceIds.map(cleanText).filter(Boolean))] : [];
+  const facts = evidenceIds.map(id => store.evidenceRecords.find(item => item.id === id));
+  if (facts.some(item => !item)) throw new Error("公司关系引用了不存在的事实证据");
+  if (facts.some(item => item.kind !== "fact")) throw new Error("公司关系只能引用事实证据");
+  if (status !== "unknown" && !evidenceIds.length) throw new Error("支持或反证结论必须引用事实证据");
+  let score = input.score == null || input.score === "" ? null : Number(input.score);
+  if (status === "unknown") score = null;
+  if (status === "contradicted") score = 0;
+  if (status === "supported" && (!Number.isFinite(score) || score < 1 || score > 5)) throw new Error("支持结论的关系强度必须为 1–5");
+  const supersedesId = cleanText(input.supersedesId) || null;
+  if (supersedesId && !store.companyRelations.some(item => item.id === supersedesId && item.assetCode === assetCode && item.stage === stage)) throw new Error("被更正的公司关系不存在");
+  const now = new Date().toISOString();
+  return {
+    id: `company-relation-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    assetCode,
+    stage,
+    status,
+    score,
+    title,
+    details,
+    evidenceIds,
+    supersedesId,
+    validAsOf: cleanText(input.validAsOf) || now.slice(0, 10),
+    createdAt: now,
+    contentHash: contentHash({ assetCode, stage, status, score, title, details, evidenceIds, supersedesId })
+  };
+}
+
+function validateProbabilityReportInput(input = {}) {
+  if (!cleanText(input.asOf)) throw new Error("概率研报必须冻结生成时间");
+  if (!/^\d{6}$/.test(cleanText(input.asset?.code || input.assetCode))) throw new Error("概率研报必须关联六位证券代码");
+  if (!cleanText(input.horizon)) throw new Error("概率研报必须冻结预测周期");
+  if (!cleanText(input.outcomeDefinition?.benchmark) || !cleanText(input.outcomeDefinition?.bull) || !cleanText(input.outcomeDefinition?.bear)) throw new Error("概率研报必须冻结基准和多空结果定义");
+  if (!Array.isArray(input.signals) || !input.signals.length) throw new Error("概率研报至少需要一个可核验信号");
+  for (const signal of input.signals) {
+    if (!cleanText(signal.name)) throw new Error("概率研报信号必须填写名称");
+    if (!Number.isFinite(Number(signal.direction)) || Number(signal.direction) < -1 || Number(signal.direction) > 1) throw new Error("信号方向必须在 -1 到 1 之间");
+    if (!Number.isFinite(Number(signal.reliability)) || Number(signal.reliability) < 0 || Number(signal.reliability) > 1) throw new Error("信号可靠度必须在 0 到 1 之间");
+    if (!Array.isArray(signal.evidenceRefs) || !signal.evidenceRefs.some(ref => cleanText(ref))) throw new Error("每个概率研报信号必须绑定证据引用");
+  }
+}
+
+function probabilityInputWithCalibration(store, rawInput = {}) {
+  const input = JSON.parse(JSON.stringify(rawInput || {}));
+  const suppliedModelId = cleanText(input.calibration?.modelId);
+  if (suppliedModelId && suppliedModelId !== BAYESIAN_MODEL_VERSION) return input;
+  const calibration = summarizeProbabilityCalibration(store.probabilityReports || [], store.forecastResolutions || [], {
+    modelId: BAYESIAN_MODEL_VERSION,
+    horizon: cleanText(input.horizon) || null
+  });
+  input.calibration = {
+    modelId: calibration.modelId,
+    resolvedSampleSize: calibration.resolvedSampleSize,
+    brierScore: calibration.brierScore,
+    baselineBrierScore: calibration.baselineBrierScore,
+    expectedCalibrationError: calibration.expectedCalibrationError,
+    automatic: true
+  };
+  return input;
+}
+
+let informationCollectionRunning = false;
+async function runInformationCollection(sourceIds = null, trigger = "manual") {
+  if (informationCollectionRunning) throw new Error("资讯采集任务已经在运行");
+  const before = loadStore();
+  const selected = before.informationSources.filter(source => {
+    if (Array.isArray(sourceIds) && sourceIds.length) return sourceIds.includes(source.id);
+    return source.enabled === true;
+  });
+  if (!selected.length) throw new Error("没有可运行的资讯来源");
+  informationCollectionRunning = true;
+  const startedAt = new Date().toISOString();
+  const runId = `information-run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  before.informationCollectionRuns.push({ id: runId, trigger, sourceIds: selected.map(item => item.id), status: "running", startedAt, finishedAt: null, sourceResults: [], insertedCount: 0, duplicateCount: 0 });
+  saveStore(before, "information-collection-start");
+  const sourceResults = [];
+  try {
+    for (const source of selected) {
+      try {
+        const result = await collectInformationSource(source);
+        sourceResults.push({ sourceId: source.id, status: "completed", result });
+      } catch (error) {
+        sourceResults.push({ sourceId: source.id, status: "failed", error: String(error.message || error) });
+      }
+    }
+    const store = loadStore();
+    const run = store.informationCollectionRuns.find(item => item.id === runId);
+    let insertedCount = 0;
+    let duplicateCount = 0;
+    const finishedAt = new Date().toISOString();
+    for (const sourceResult of sourceResults) {
+      const source = store.informationSources.find(item => item.id === sourceResult.sourceId);
+      if (!source) continue;
+      source.nextRunAt = nextRandomRunAt(source, new Date(finishedAt));
+      source.updatedAt = finishedAt;
+      if (sourceResult.status === "failed") {
+        source.lastError = sourceResult.error;
+        continue;
+      }
+      source.lastRunAt = finishedAt;
+      source.lastError = null;
+      source.lastCursor = sourceResult.result.cursor || source.lastCursor;
+      for (const item of sourceResult.result.items) {
+        const event = normalizeInformationEvent({
+          ...item,
+          assetCodes: item.assetCodes || source.config.assetCodes || [],
+          industryTags: item.industryTags || source.config.industryTags || []
+        });
+        const canonicalUrl = canonicalInformationUrl(event.sourceUrl);
+        const duplicate = store.informationEvents.find(existing => existing.originalHash === event.originalHash
+          || (canonicalUrl && canonicalInformationUrl(existing.sourceUrl) === canonicalUrl));
+        if (duplicate) {
+          duplicate.rank = event.rank;
+          duplicate.hotValue = event.hotValue;
+          duplicate.lastSeenAt = finishedAt;
+          duplicate.updatedAt = finishedAt;
+          duplicate.collectionChannels = [...(duplicate.collectionChannels || [])
+            .filter(channel => channel.sourceId !== source.id), {
+              sourceId: source.id,
+              sourceName: source.name,
+              rank: event.rank,
+              hotValue: event.hotValue,
+              lastSeenAt: finishedAt
+            }];
+          duplicateCount += 1;
+        } else {
+          event.collectionChannels = [{ sourceId: source.id, sourceName: source.name, rank: event.rank, hotValue: event.hotValue, lastSeenAt: finishedAt }];
+          store.informationEvents.push(event);
+          insertedCount += 1;
+        }
+      }
+    }
+    reconcileInformationContentFallbacks(store);
+    if (run) {
+      run.status = sourceResults.every(item => item.status === "failed") ? "failed" : (sourceResults.some(item => item.status === "failed") ? "partial" : "completed");
+      run.finishedAt = finishedAt;
+      run.insertedCount = insertedCount;
+      run.duplicateCount = duplicateCount;
+      run.sourceResults = sourceResults.map(item => ({ sourceId: item.sourceId, status: item.status, itemCount: item.result?.items?.length || 0, error: item.error || null }));
+    }
+    store.informationCollectionRuns = store.informationCollectionRuns.slice(-200);
+    store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-collection-finished", runId, status: run?.status, insertedCount, duplicateCount, createdAt: finishedAt });
+    saveStore(store, "information-collection-finish");
+    return run;
+  } finally {
+    informationCollectionRunning = false;
+  }
+}
+
+let informationContentRunning = false;
+const informationContentLastRequestAt = new Map();
+const INFORMATION_CONTENT_BATCH_SIZE = Math.max(1, Math.min(8, Number(process.env.TRADE_INFORMATION_CONTENT_BATCH_SIZE || 4)));
+const INFORMATION_CONTENT_PER_HOST_LIMIT = Math.max(1, Math.min(3, Number(process.env.TRADE_INFORMATION_CONTENT_PER_HOST_LIMIT || 2)));
+const INFORMATION_CONTENT_HOST_GAP_MS = Math.max(1000, Math.min(15_000, Number(process.env.TRADE_INFORMATION_CONTENT_HOST_GAP_MS || 3500)));
+
+async function paceInformationContentRequest(event) {
+  const host = contentHostKey(event);
+  const waitMs = INFORMATION_CONTENT_HOST_GAP_MS - (Date.now() - Number(informationContentLastRequestAt.get(host) || 0));
+  if (waitMs > 0) await new Promise(resolve => setTimeout(resolve, waitMs));
+  informationContentLastRequestAt.set(host, Date.now());
+}
+
+function eventContentPolicy(event, store) {
+  const source = store.informationSources.find(item => item.id === event.collectorSourceId);
+  return cleanText(event.contentPolicy || event.contentMode || source?.config?.contentMode) || "source_page";
+}
+
+function contentParagraphHtml(value) {
+  return String(value || "").split(/\n+/).map(cleanText).filter(Boolean)
+    .map(line => `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")}</p>`)
+    .join("\n");
+}
+
+function reconcileInformationContentFallbacks(store) {
+  let changed = false;
+  for (const event of store.informationEvents.filter(item => item.status !== "archived")) {
+    const policy = eventContentPolicy(event, store);
+    if (event.contentPolicy !== policy) {
+      event.contentPolicy = policy;
+      changed = true;
+    }
+    const current = getInformationContent(event.id);
+    if (policy === "headline_only") {
+      if (event.contentStatus !== "headline_only" || current?.contentKind !== "headline_only") {
+        upsertInformationContent(event.id, {
+          schemaVersion: ARTICLE_CONTENT_SCHEMA_VERSION,
+          sourceUrl: event.sourceUrl,
+          finalUrl: event.sourceUrl,
+          title: event.title,
+          excerpt: event.title,
+          status: "headline_only",
+          contentOrigin: "collector_payload",
+          contentKind: "headline_only",
+          fetchedAt: event.collectedAt || new Date().toISOString()
+        });
+        event.contentStatus = "headline_only";
+        event.contentOrigin = "collector_payload";
+        event.contentKind = "headline_only";
+        event.contentNeedsUpgrade = false;
+        event.contentRetryAt = null;
+        event.contentError = null;
+        changed = true;
+      }
+      continue;
+    }
+    const summary = cleanText(event.summary);
+    const title = cleanText(event.title);
+    const meaningfulSummary = summary.length >= 60 && summary !== title;
+    if (meaningfulSummary && !current?.contentText) {
+      const hash = crypto.createHash("sha256").update(summary).digest("hex");
+      upsertInformationContent(event.id, {
+        schemaVersion: ARTICLE_CONTENT_SCHEMA_VERSION,
+        sourceUrl: event.sourceUrl,
+        finalUrl: event.sourceUrl,
+        title: event.title,
+        publishedAt: event.publishedAt,
+        contentText: summary,
+        contentHtml: contentParagraphHtml(summary),
+        excerpt: summary.slice(0, 300),
+        contentHash: hash,
+        status: "summary_only",
+        contentOrigin: "collector_payload",
+        contentKind: "substantial_summary",
+        fetchedAt: event.collectedAt || new Date().toISOString()
+      });
+      event.contentStatus = "summary_only";
+      event.contentHash = hash;
+      event.contentFetchedAt = event.collectedAt || new Date().toISOString();
+      event.contentOrigin = "collector_payload";
+      event.contentKind = "substantial_summary";
+      event.contentNeedsUpgrade = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function informationRuntimeSnapshot(store = loadStore()) {
+  const rows = openDatabase().prepare("SELECT event_id, fetch_status, content_origin, content_kind, length(content_text) AS content_length, http_status, error, updated_at FROM information_content").all();
+  const contentByEvent = new Map(rows.map(row => [row.event_id, row]));
+  const sources = new Map(store.informationSources.map(source => [source.id, source]));
+  const emptyCounts = () => ({ total: 0, article: 0, brief: 0, summaryOnly: 0, headlineOnly: 0, pending: 0, blocked: 0, failed: 0, analyzable: 0, substantial: 0 });
+  const counts = emptyCounts();
+  const bySource = new Map();
+  for (const event of store.informationEvents.filter(item => item.status !== "archived")) {
+    const row = contentByEvent.get(event.id);
+    const status = row?.fetch_status || event.contentStatus || "pending";
+    const kind = row?.content_kind || event.contentKind || null;
+    const source = sources.get(event.collectorSourceId);
+    const sourceId = source?.id || event.collectorSourceId || "manual";
+    if (!bySource.has(sourceId)) bySource.set(sourceId, { sourceId, sourceName: source?.name || event.sourceName || "手工录入", enabled: source?.enabled !== false, counts: emptyCounts() });
+    for (const target of [counts, bySource.get(sourceId).counts]) {
+      target.total += 1;
+      if (status === "complete" && kind === "brief") target.brief += 1;
+      else if (status === "complete") target.article += 1;
+      else if (status === "summary_only") target.summaryOnly += 1;
+      else if (status === "headline_only") target.headlineOnly += 1;
+      else if (status === "blocked") target.blocked += 1;
+      else if (status === "failed") target.failed += 1;
+      else target.pending += 1;
+      if (["complete", "summary_only"].includes(status)) target.analyzable += 1;
+      if (Number(row?.content_length || 0) >= 80) target.substantial += 1;
+    }
+  }
+  const recentCollectionRuns = [...(store.informationCollectionRuns || [])].slice(-12).reverse();
+  const recentContentRuns = [...(store.informationContentRuns || [])].slice(-12).reverse();
+  return {
+    schemaVersion: "information-runtime/v1.0.0",
+    generatedAt: new Date().toISOString(),
+    state: { collectionRunning: informationCollectionRunning, contentRunning: informationContentRunning },
+    counts,
+    queue: {
+      waiting: counts.pending,
+      upgrade: store.informationEvents.filter(event => event.status !== "archived" && event.contentNeedsUpgrade).length,
+      retrying: counts.blocked + counts.failed
+    },
+    sources: [...bySource.values()].sort((a, b) => b.counts.total - a.counts.total),
+    recentCollectionRuns,
+    recentContentRuns
+  };
+}
+
+async function newsNowRuntimeStatus() {
+  const baseUrl = DEFAULT_NEWSNOW_BASE_URL;
+  let mode = "custom";
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    if (["127.0.0.1", "localhost", "::1"].includes(hostname)) mode = "local";
+  } catch {}
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(`${baseUrl}/`, { signal: AbortSignal.timeout(1500) });
+    return {
+      mode,
+      baseUrl,
+      online: response.ok,
+      latencyMs: Date.now() - startedAt,
+      version: "0.0.41",
+      revision: "2173126f804bec0201769f59d933add6c4632d17",
+      error: response.ok ? null : `HTTP ${response.status}`
+    };
+  } catch (error) {
+    return {
+      mode,
+      baseUrl,
+      online: false,
+      latencyMs: null,
+      version: "0.0.41",
+      revision: "2173126f804bec0201769f59d933add6c4632d17",
+      error: String(error?.message || error)
+    };
+  }
+}
+
+async function runInformationContentFetch(eventIds = null, trigger = "manual", limit = 3) {
+  if (informationContentRunning) throw new Error("原文补抓任务已经在运行");
+  const snapshot = loadStore();
+  if (reconcileInformationContentFallbacks(snapshot)) saveStore(snapshot, "information-content-fallbacks");
+  const now = Date.now();
+  const explicitIds = Array.isArray(eventIds) && eventIds.length ? new Set(eventIds) : null;
+  const eligible = snapshot.informationEvents
+    .filter(event => event.status !== "archived")
+    .filter(event => {
+      if (explicitIds) return explicitIds.has(event.id);
+      if (event.contentStatus === "headline_only") return false;
+      if (event.contentStatus === "pending" || (event.contentStatus === "summary_only" && event.contentNeedsUpgrade)) return true;
+      if (!["failed", "blocked"].includes(event.contentStatus)) return false;
+      if (Number(event.contentAttemptCount || 0) >= 3) return false;
+      return !event.contentRetryAt || new Date(event.contentRetryAt).getTime() <= now;
+    })
+    .sort((a, b) => String(a.collectedAt || a.publishedAt).localeCompare(String(b.collectedAt || b.publishedAt)));
+  const maxItems = Math.max(1, Math.min(20, Number(limit || 3)));
+  const selected = selectInformationContentBatch(eligible, {
+    limit: maxItems,
+    perHostLimit: INFORMATION_CONTENT_PER_HOST_LIMIT,
+    explicitIds: explicitIds ? [...explicitIds] : null,
+    now
+  });
+  if (!selected.length) return { id: null, status: "idle", itemCount: 0, completedCount: 0, summaryOnlyCount: 0, failedCount: 0, message: "当前没有待补抓原文" };
+  informationContentRunning = true;
+  const runId = `information-content-run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const startedAt = new Date().toISOString();
+  const results = [];
+  try {
+    for (const event of selected) {
+      try {
+        await paceInformationContentRequest(event);
+        const content = await fetchArticleContent(event.sourceUrl);
+        if (content.status === "failed") {
+          const extractionError = new Error(content.error || "页面可访问，但没有提取到正文");
+          extractionError.httpStatus = content.httpStatus;
+          throw extractionError;
+        }
+        upsertInformationContent(event.id, content);
+        results.push({ eventId: event.id, status: content.status, outcome: "completed", content });
+      } catch (error) {
+        const httpStatus = Number(error.httpStatus || 0) || null;
+        const existingContent = getInformationContent(event.id);
+        const failedStatus = [401, 403, 429].includes(httpStatus) ? "blocked" : "failed";
+        const failure = existingContent?.contentText ? {
+          ...existingContent,
+          schemaVersion: ARTICLE_CONTENT_SCHEMA_VERSION,
+          status: "summary_only",
+          httpStatus,
+          error: String(error.message || error).slice(0, 1000),
+          fetchedAt: new Date().toISOString()
+        } : {
+          schemaVersion: ARTICLE_CONTENT_SCHEMA_VERSION,
+          sourceUrl: event.sourceUrl,
+          finalUrl: event.sourceUrl,
+          status: failedStatus,
+          httpStatus,
+          error: String(error.message || error).slice(0, 1000),
+          contentOrigin: "source_page",
+          contentKind: "unavailable",
+          fetchedAt: new Date().toISOString()
+        };
+        upsertInformationContent(event.id, failure);
+        results.push({ eventId: event.id, status: failure.status, outcome: "failed", content: failure });
+      }
+    }
+    const store = loadStore();
+    const finishedAt = new Date().toISOString();
+    for (const result of results) {
+      const event = store.informationEvents.find(item => item.id === result.eventId);
+      if (!event) continue;
+      event.contentAttemptCount = Number(event.contentAttemptCount || 0) + 1;
+      event.contentStatus = result.status;
+      event.contentFetchedAt = result.content.fetchedAt || finishedAt;
+      event.contentHash = result.content.contentHash || null;
+      event.contentError = result.content.error || null;
+      event.contentOrigin = result.content.contentOrigin || null;
+      event.contentKind = result.content.contentKind || null;
+      event.contentNeedsUpgrade = result.outcome === "failed" && result.status === "summary_only";
+      if (result.outcome === "completed") {
+        event.contentRetryAt = null;
+      } else {
+        const retryDelay = [30, 360, 1440][Math.min(event.contentAttemptCount - 1, 2)];
+        event.contentRetryAt = new Date(Date.now() + retryDelay * 60_000).toISOString();
+      }
+      event.updatedAt = finishedAt;
+      event.aiProcessingStatus = processingState(event);
+    }
+    const completedCount = results.filter(item => item.outcome === "completed" && item.status === "complete").length;
+    const summaryOnlyCount = results.filter(item => item.status === "summary_only").length;
+    const failedCount = results.filter(item => item.outcome === "failed").length;
+    const run = {
+      id: runId,
+      trigger,
+      status: failedCount === results.length ? "failed" : failedCount ? "partial" : "completed",
+      eventIds: selected.map(item => item.id),
+      itemCount: selected.length,
+      completedCount,
+      summaryOnlyCount,
+      failedCount,
+      startedAt,
+      finishedAt,
+      results: results.map(item => ({ eventId: item.eventId, status: item.status, outcome: item.outcome, httpStatus: item.content.httpStatus || null, error: item.content.error || null }))
+    };
+    store.informationContentRuns.push(run);
+    store.informationContentRuns = store.informationContentRuns.slice(-200);
+    store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-content-finished", runId, status: run.status, completedCount, summaryOnlyCount, failedCount, createdAt: finishedAt });
+    saveStore(store, "information-content-finish");
+    return run;
+  } finally {
+    informationContentRunning = false;
+  }
 }
 
 function validateTradeForPosting(store, trade) {
@@ -1375,6 +2407,7 @@ function dailyWorkflow(store) {
   const nextDate = nextTradingDate(new Date());
   const todayTrades = store.trades.filter(item => item.date === today);
   const review = store.dailySessions?.[today]?.postmarket;
+  const disciplineV2 = disciplineV2Dashboard(store);
   const plan = store.plans.find(item => [today, nextDate].includes(item.planForDate) && item.status === "active" && item.planFormat === "v0.3");
   const recentEvidence = store.evidenceRecords.filter(item => String(item.createdAt || "").slice(0, 10) === today);
   const tasks = [
@@ -1382,7 +2415,7 @@ function dailyWorkflow(store) {
     { id: "evidence", label: "补充影响计划的新事实", detail: recentEvidence.length ? `今天已新增 ${recentEvidence.length} 条` : `资料库共 ${store.evidenceRecords.length} 条，今天尚未新增`, completed: recentEvidence.length > 0, page: "assets" },
     { id: "plan", label: "检查并确认交易计划", detail: plan ? `${plan.planForDate} · V${plan.version} 已生效` : "没有已确认的 v0.3 计划", completed: Boolean(plan), page: "plan" },
     { id: "execution", label: "盘中成交后立即记录", detail: todayTrades.length ? `今天已记录 ${todayTrades.length} 笔` : "今天暂无成交记录", completed: todayTrades.length > 0, page: "intraday", optional: true },
-    { id: "review", label: "收盘后完成纪律复盘", detail: review?.completedAt ? "今日复盘已保存" : "今日复盘尚未完成", completed: Boolean(review?.completedAt), page: "postmarket" }
+    { id: "review", label: "收盘后完成逐笔纪律复盘", detail: disciplineV2.pendingAssessmentCount ? `还有 ${disciplineV2.pendingAssessmentCount} 笔成交未正式评分` : (review?.completedAt ? "逐笔评分与整日复盘已完成" : "逐笔评分完成后保存整日复盘"), completed: Boolean(review?.completedAt) && disciplineV2.pendingAssessmentCount === 0, page: "postmarket" }
   ];
   return { date: today, nextTradingDate: nextDate, tasks, completedCount: tasks.filter(item => item.completed).length };
 }
@@ -1453,6 +2486,49 @@ function listBackups() {
     try { summary = accountSummary(migrateStore(JSON.parse(fs.readFileSync(file, "utf8")))); } catch {}
     return { name, size: stat.size, createdAt: new Date(Math.max(stat.mtimeMs, stat.birthtimeMs)).toISOString(), summary };
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function storageStatus() {
+  const db = openDatabase();
+  const pageSize = Number(db.prepare("PRAGMA page_size").get().page_size || 0);
+  const pageCount = Number(db.prepare("PRAGMA page_count").get().page_count || 0);
+  const freePages = Number(db.prepare("PRAGMA freelist_count").get().freelist_count || 0);
+  const state = db.prepare("SELECT length(payload) AS payload_bytes FROM app_state WHERE id = 1").get();
+  const versions = db.prepare("SELECT count(*) AS count, coalesce(sum(length(payload)), 0) AS payload_bytes FROM state_versions").get();
+  const records = db.prepare("SELECT count(*) AS count, coalesce(sum(length(payload)), 0) AS payload_bytes FROM state_collection_records").get();
+  const content = db.prepare("SELECT count(*) AS count, coalesce(sum(length(content_text)), 0) AS text_bytes FROM information_content").get();
+  const backups = fs.readdirSync(BACKUP_DIR).filter(name => name.endsWith(".json")).map(name => fs.statSync(path.join(BACKUP_DIR, name)).size);
+  return {
+    databaseBytes: fs.existsSync(DATABASE_FILE) ? fs.statSync(DATABASE_FILE).size : 0,
+    reclaimableBytes: freePages * pageSize,
+    appStateBytes: Number(state?.payload_bytes || 0),
+    stateVersionCount: Number(versions.count || 0),
+    stateVersionBytes: Number(versions.payload_bytes || 0),
+    collectionRecordCount: Number(records.count || 0),
+    collectionRecordBytes: Number(records.payload_bytes || 0),
+    informationContentCount: Number(content.count || 0),
+    informationContentTextBytes: Number(content.text_bytes || 0),
+    backupCount: backups.length,
+    backupBytes: backups.reduce((sum, value) => sum + value, 0),
+    policy: { stateSnapshots: 24, automaticBackupIntervalHours: 6, backupRetention: 30 }
+  };
+}
+
+function compactStorage() {
+  const before = storageStatus();
+  const store = loadStore();
+  store.auditLog.push({ id: `audit-${Date.now()}`, type: "storage-compacted", createdAt: new Date().toISOString() });
+  saveStore(store, "storage-compact");
+  const db = openDatabase();
+  db.prepare("DELETE FROM state_versions WHERE id NOT IN (SELECT id FROM state_versions ORDER BY id DESC LIMIT 12)").run();
+  const backupFiles = fs.readdirSync(BACKUP_DIR)
+    .filter(name => name.endsWith(".json"))
+    .map(name => ({ name, file: path.join(BACKUP_DIR, name), stat: fs.statSync(path.join(BACKUP_DIR, name)) }))
+    .sort((a, b) => Math.max(b.stat.mtimeMs, b.stat.birthtimeMs) - Math.max(a.stat.mtimeMs, a.stat.birthtimeMs));
+  for (const item of backupFiles.slice(14)) fs.unlinkSync(item.file);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.exec("VACUUM");
+  return { before, after: storageStatus() };
 }
 
 async function refreshHistoricalClose(holding, date) {
@@ -2359,6 +3435,42 @@ function serveStatic(req, res) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+function decisionRulebooks() {
+  return {
+    discipline: {
+      version: DISCIPLINE_RULEBOOK_VERSION,
+      dimensions: DISCIPLINE_DIMENSIONS,
+      principles: ["过程分与盈亏分离", "硬风险规则设置分数上限", "关键记录不足时不制造伪精确分数", "紧急减仓允许先执行后补记"]
+    },
+    influence: {
+      version: INFLUENCE_RULEBOOK_VERSION,
+      sourceDefaults: INFLUENCE_SOURCE_DEFAULTS,
+      eventWeights: INFLUENCE_EVENT_WEIGHTS,
+      requiredTransmissionStages: REQUIRED_TRANSMISSION_STAGES,
+      principles: ["来源可靠性与内容可信度分开", "行业利好不等于公司受益", "传导链关键节点缺失时不计算公司影响分", "影响分不是涨跌概率"]
+    },
+    informationCollection: {
+      version: INFORMATION_SOURCE_SCHEMA_VERSION,
+      adapters: [...INFORMATION_SOURCE_ADAPTERS],
+      newsNowRecommendedSources: NEWSNOW_RECOMMENDED_SOURCES,
+      principles: ["只保存环境变量名，不保存访问令牌", "随机时间窗而非固定整点", "保留来源、外部编号和原始指纹", "采集失败不制造资讯事件"]
+    },
+    informationContent: {
+      version: ARTICLE_CONTENT_SCHEMA_VERSION,
+      principles: ["正文独立保存在本地SQLite", "不访问本机和内网地址", "限制页面体积和重定向次数", "抓取失败保留摘要和原文链接", "正文更新后旧AI结果自动失效"]
+    },
+    informationProcessing: {
+      version: INFORMATION_PROCESSING_RULEBOOK_VERSION,
+      schemaVersion: INFORMATION_PROCESSING_SCHEMA_VERSION,
+      principles: ["采集与AI处理分离", "原文不可被AI结果覆盖", "统一接口允许任意AI代理处理", "AI不可用时按时间顺序降级展示", "内容哈希变化后旧结果自动失效"]
+    },
+    probability: {
+      version: PROBABILITY_SCHEMA_VERSION,
+      principles: ["预测生成时冻结", "结果口径事前定义", "至少30个已结算同口径样本", "样本外Brier分优于基线后才显示概率"]
+    }
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -2371,10 +3483,21 @@ const server = http.createServer(async (req, res) => {
         account: accountSummary(store),
         health: dataHealth(store),
         discipline: disciplineSummary(store, 7),
+        disciplineV2: disciplineV2Dashboard(store),
         v03: {
           plannedAssetCount: (store.plannedAssets || []).filter(item => item.status !== "archived").length,
           evidenceCount: (store.evidenceRecords || []).length,
-          disciplineEventCount: (store.disciplineEvents || []).length
+          disciplineEventCount: (store.disciplineEvents || []).length,
+          informationEventCount: (store.informationEvents || []).length,
+          pendingInformationEventCount: (store.informationEvents || []).filter(item => ["new", "assessing"].includes(item.status)).length,
+          influenceAssessmentCount: (store.influenceAssessments || []).length,
+          companyRelationCount: (store.companyRelations || []).length,
+          probabilityReportCount: (store.probabilityReports || []).length,
+          informationSourceCount: (store.informationSources || []).length,
+          enabledInformationSourceCount: (store.informationSources || []).filter(item => item.enabled).length,
+          aiProcessedInformationCount: (store.informationEvents || []).filter(item => processingState(item) === "completed").length,
+          pendingAiInformationCount: (store.informationEvents || []).filter(item => item.status !== "archived" && ["pending", "failed"].includes(processingState(item))).length,
+          latestInformationCollectionRun: (store.informationCollectionRuns || []).at(-1) || null
         },
         onboarding: onboardingSummary(store),
         dailyWorkflow: dailyWorkflow(store),
@@ -2383,6 +3506,554 @@ const server = http.createServer(async (req, res) => {
         nextTradingDate: nextTradingDate(new Date()),
         latestMarketClose: Object.values(store.marketCloses || {}).sort((a, b) => b.date.localeCompare(a.date))[0] || null
       });
+    }
+    if (url.pathname === "/api/rulebooks" && req.method === "GET") {
+      return json(res, 200, decisionRulebooks());
+    }
+    if (url.pathname === "/api/information-processing/instructions" && req.method === "GET") {
+      return json(res, 200, informationProcessingInstructions());
+    }
+    if (url.pathname === "/api/information-processing/pending" && req.method === "GET") {
+      const store = loadStore();
+      const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 50)));
+      const holdings = portfolioHoldingsSnapshot(store);
+      const items = pendingInformationEvents(store.informationEvents, { limit }).map(event => buildInformationProcessingTaskItem(event, holdings));
+      const activeEvents = store.informationEvents.filter(item => item.status !== "archived");
+      const eligibleEvents = activeEvents.filter(item => item.contentStatus !== "headline_only");
+      const states = eligibleEvents.map(processingState);
+      return json(res, 200, {
+        schemaVersion: INFORMATION_PROCESSING_SCHEMA_VERSION,
+        ruleVersion: INFORMATION_PROCESSING_RULEBOOK_VERSION,
+        items,
+        counts: {
+          total: states.length,
+          completed: states.filter(state => state === "completed").length,
+          pending: states.filter(state => state === "pending").length,
+          processing: states.filter(state => state === "processing").length,
+          failed: states.filter(state => state === "failed").length,
+          excludedHeadlineOnly: activeEvents.length - eligibleEvents.length
+        }
+      });
+    }
+    if (url.pathname === "/api/information-processing/runs" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, { runs: [...store.informationProcessingRuns].reverse().slice(0, 100) });
+    }
+    if (url.pathname === "/api/information-processing/runs" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("创建AI资讯整理批次前必须明确确认");
+      const processor = cleanText(body.processor);
+      if (!processor) throw new Error("必须填写处理代理名称processor");
+      const limit = Math.max(1, Math.min(100, Number(body.limit || 50)));
+      const store = loadStore();
+      const selected = pendingInformationEvents(store.informationEvents, { limit });
+      if (!selected.length) {
+        return json(res, 200, { run: null, task: null, message: "当前没有待处理资讯" });
+      }
+      const now = new Date().toISOString();
+      const portfolioHoldings = portfolioHoldingsSnapshot(store);
+      const run = {
+        id: `information-processing-run-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        schemaVersion: INFORMATION_PROCESSING_SCHEMA_VERSION,
+        ruleVersion: INFORMATION_PROCESSING_RULEBOOK_VERSION,
+        processor,
+        status: "processing",
+        eventIds: selected.map(item => item.id),
+        itemCount: selected.length,
+        completedCount: 0,
+        failedCount: 0,
+        pendingCount: selected.length,
+        portfolioHoldings,
+        startedAt: now,
+        finishedAt: null
+      };
+      for (const event of selected) {
+        event.aiProcessingStatus = "processing";
+        event.aiProcessingRunId = run.id;
+        event.aiProcessingError = null;
+      }
+      store.informationProcessingRuns.push(run);
+      store.informationProcessingRuns = store.informationProcessingRuns.slice(-200);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-processing-started", runId: run.id, processor, itemCount: run.itemCount, createdAt: now });
+      saveStore(store, "information-processing-start");
+      return json(res, 201, {
+        run,
+        task: {
+          schemaVersion: INFORMATION_PROCESSING_SCHEMA_VERSION,
+          ruleVersion: INFORMATION_PROCESSING_RULEBOOK_VERSION,
+          instructionsEndpoint: "/api/information-processing/instructions",
+          resultsEndpoint: "/api/information-processing/results",
+          items: selected.map(event => buildInformationProcessingTaskItem(event, portfolioHoldings))
+        }
+      });
+    }
+    const informationProcessingRunRoute = url.pathname.match(/^\/api\/information-processing\/runs\/([^/]+)$/);
+    if (informationProcessingRunRoute && req.method === "GET") {
+      const store = loadStore();
+      const run = store.informationProcessingRuns.find(item => item.id === decodeURIComponent(informationProcessingRunRoute[1]));
+      if (!run) throw new Error("未找到AI资讯整理批次");
+      const holdings = run.portfolioHoldings || portfolioHoldingsSnapshot(store);
+      const items = run.eventIds.map(id => store.informationEvents.find(item => item.id === id)).filter(Boolean).map(event => buildInformationProcessingTaskItem(event, holdings));
+      return json(res, 200, { run, task: { schemaVersion: run.schemaVersion, ruleVersion: run.ruleVersion, items } });
+    }
+    if (url.pathname === "/api/information-processing/results" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("写入AI资讯整理结果前必须明确确认");
+      const runId = cleanText(body.runId);
+      const processor = cleanText(body.processor);
+      if (!runId || !processor) throw new Error("必须填写runId和processor");
+      if (!Array.isArray(body.results) || !Array.isArray(body.failures || [])) throw new Error("results和failures必须是数组");
+      const store = loadStore();
+      const run = store.informationProcessingRuns.find(item => item.id === runId);
+      if (!run) throw new Error("未找到AI资讯整理批次");
+      if (run.processor !== processor) throw new Error("processor与领取批次的代理不一致");
+      if (cleanText(body.ruleVersion || run.ruleVersion) !== run.ruleVersion) throw new Error(`ruleVersion必须是${run.ruleVersion}`);
+      const allowedIds = new Set(run.eventIds);
+      const normalized = body.results.map(result => {
+        if (!allowedIds.has(cleanText(result?.eventId))) throw new Error("结果包含不属于当前批次的资讯");
+        const event = store.informationEvents.find(item => item.id === result.eventId);
+        return { event, enrichment: normalizeProcessingResult(result, event, { processor, ruleVersion: run.ruleVersion, holdings: run.portfolioHoldings || [] }) };
+      });
+      const failures = (body.failures || []).map(item => {
+        const eventId = cleanText(item?.eventId);
+        if (!allowedIds.has(eventId)) throw new Error("失败项包含不属于当前批次的资讯");
+        const event = store.informationEvents.find(entry => entry.id === eventId);
+        if (cleanText(item.inputHash) !== eventInputHash(event)) throw new Error(`资讯 ${eventId} 已发生变化，请重新获取后再处理`);
+        const error = cleanText(item.error);
+        if (!error) throw new Error("失败项必须填写error");
+        return { event, error: error.slice(0, 1000) };
+      });
+      const submittedIds = new Set([...normalized.map(item => item.event.id), ...failures.map(item => item.event.id)]);
+      if (submittedIds.size !== normalized.length + failures.length) throw new Error("同一资讯不能同时提交成功和失败结果");
+      for (const item of normalized) {
+        item.event.aiEnrichment = item.enrichment;
+        item.event.aiProcessingStatus = "completed";
+        item.event.aiProcessingRunId = run.id;
+        item.event.aiProcessingError = null;
+        item.event.updatedAt = item.enrichment.processedAt;
+      }
+      for (const item of failures) {
+        item.event.aiProcessingStatus = "failed";
+        item.event.aiProcessingRunId = run.id;
+        item.event.aiProcessingError = item.error;
+        item.event.updatedAt = new Date().toISOString();
+      }
+      const runEvents = run.eventIds.map(id => store.informationEvents.find(item => item.id === id)).filter(Boolean);
+      run.completedCount = runEvents.filter(item => processingState(item) === "completed").length;
+      run.failedCount = runEvents.filter(item => processingState(item) === "failed").length;
+      run.pendingCount = run.itemCount - run.completedCount - run.failedCount;
+      run.status = run.pendingCount > 0
+        ? "processing"
+        : run.completedCount === 0
+          ? "failed"
+          : run.failedCount > 0 ? "partial" : "completed";
+      run.finishedAt = run.pendingCount === 0 ? new Date().toISOString() : null;
+      run.updatedAt = new Date().toISOString();
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-processing-results", runId: run.id, status: run.status, completedCount: run.completedCount, failedCount: run.failedCount, createdAt: run.updatedAt });
+      saveStore(store, "information-processing-results");
+      return json(res, 200, { run, acceptedCount: normalized.length, failedCount: failures.length });
+    }
+    if (url.pathname === "/api/information-runtime" && req.method === "GET") {
+      const snapshot = informationRuntimeSnapshot();
+      snapshot.newsNow = await newsNowRuntimeStatus();
+      return json(res, 200, snapshot);
+    }
+    if (url.pathname === "/api/information-sources" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, { sources: store.informationSources, runs: store.informationCollectionRuns.slice(-20).reverse() });
+    }
+    if (url.pathname === "/api/information-sources" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存资讯来源前必须明确确认");
+      const store = loadStore();
+      const source = normalizeInformationSource(body.input || body);
+      source.nextRunAt = source.enabled ? new Date().toISOString() : null;
+      store.informationSources.push(source);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-source-created", sourceId: source.id, createdAt: source.createdAt });
+      saveStore(store, "information-source");
+      return json(res, 201, { source });
+    }
+    if (url.pathname === "/api/information-sources/newsnow-defaults" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("添加 NewsNow 推荐来源前必须明确确认");
+      const store = loadStore();
+      const baseUrl = cleanText(body.baseUrl) || DEFAULT_NEWSNOW_BASE_URL;
+      const added = [];
+      const existing = [];
+      for (const template of NEWSNOW_RECOMMENDED_SOURCES) {
+        const duplicate = store.informationSources.find(source => source.adapter === "newsnow" && source.config?.sourceId === template.key);
+        if (duplicate) {
+          existing.push(duplicate);
+          continue;
+        }
+        const source = normalizeInformationSource({
+          name: template.name,
+          adapter: "newsnow",
+          sourceType: template.sourceType,
+          enabled: true,
+          minIntervalMinutes: template.minIntervalMinutes,
+          maxIntervalMinutes: template.maxIntervalMinutes,
+          config: { baseUrl, sourceId: template.key, maxItems: 30, contentMode: template.contentMode }
+        });
+        source.nextRunAt = new Date().toISOString();
+        store.informationSources.push(source);
+        added.push(source);
+      }
+      const createdAt = new Date().toISOString();
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "newsnow-default-sources-added", addedCount: added.length, existingCount: existing.length, baseUrl, createdAt });
+      saveStore(store, "newsnow-default-sources");
+      return json(res, added.length ? 201 : 200, { added, existing, baseUrl });
+    }
+    if (url.pathname === "/api/information-sources/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      return json(res, 200, { source: normalizeInformationSource(body.input || body) });
+    }
+    const informationSourceRoute = url.pathname.match(/^\/api\/information-sources\/([^/]+)$/);
+    if (informationSourceRoute && req.method === "PUT") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("更新资讯来源前必须明确确认");
+      const store = loadStore();
+      const index = store.informationSources.findIndex(item => item.id === decodeURIComponent(informationSourceRoute[1]));
+      if (index < 0) throw new Error("未找到资讯来源");
+      const previousSource = store.informationSources[index];
+      const wasEnabled = previousSource.enabled;
+      const source = normalizeInformationSource(body.input || body, previousSource);
+      const connectionChanged = source.adapter !== previousSource.adapter || JSON.stringify(source.config) !== JSON.stringify(previousSource.config);
+      if (connectionChanged || body.input?.resetCheckpoint === true || body.resetCheckpoint === true) {
+        source.lastRunAt = null;
+        source.lastCursor = null;
+        source.lastError = null;
+      }
+      if (source.enabled && !wasEnabled) source.nextRunAt = new Date().toISOString();
+      if (!source.enabled) source.nextRunAt = null;
+      store.informationSources[index] = source;
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-source-updated", sourceId: source.id, createdAt: source.updatedAt });
+      saveStore(store, "information-source-update");
+      return json(res, 200, { source });
+    }
+    if (informationSourceRoute && req.method === "DELETE") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("删除资讯来源前必须明确确认");
+      const store = loadStore();
+      const sourceId = decodeURIComponent(informationSourceRoute[1]);
+      const source = store.informationSources.find(item => item.id === sourceId);
+      if (!source) throw new Error("未找到资讯来源");
+      const collectedEvents = store.informationEvents.filter(item => item.collectorSourceId === sourceId);
+      const protectedEvents = collectedEvents.filter(item => item.status !== "new" || (item.assessmentIds || []).length);
+      const removableIds = new Set(collectedEvents.filter(item => !protectedEvents.includes(item)).map(item => item.id));
+      store.informationEvents = store.informationEvents.filter(item => !removableIds.has(item.id));
+      store.informationSources = store.informationSources.filter(item => item.id !== sourceId);
+      const createdAt = new Date().toISOString();
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-source-deleted", sourceId, sourceName: source.name, removedEventCount: removableIds.size, preservedEventCount: protectedEvents.length, createdAt });
+      saveStore(store, "information-source-delete");
+      return json(res, 200, { sourceId, sourceName: source.name, removedEventCount: removableIds.size, preservedEventCount: protectedEvents.length, backupAvailable: true });
+    }
+    if (url.pathname === "/api/information-collection/run" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("运行资讯采集前必须明确确认");
+      const sourceIds = body.sourceId ? [String(body.sourceId)] : null;
+      return json(res, 200, { run: await runInformationCollection(sourceIds, "manual") });
+    }
+    if (url.pathname === "/api/information-content/runs" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, { runs: [...store.informationContentRuns].reverse().slice(0, 100) });
+    }
+    if (url.pathname === "/api/information-content/run" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("补抓资讯原文前必须明确确认");
+      const eventIds = body.eventId ? [cleanText(body.eventId)] : Array.isArray(body.eventIds) ? body.eventIds.map(cleanText).filter(Boolean) : null;
+      return json(res, 200, { run: await runInformationContentFetch(eventIds, "manual", body.limit || (eventIds?.length || 3)) });
+    }
+    const informationContentRoute = url.pathname.match(/^\/api\/information-content\/([^/]+)$/);
+    if (informationContentRoute && req.method === "GET") {
+      const eventId = decodeURIComponent(informationContentRoute[1]);
+      const store = loadStore();
+      const event = store.informationEvents.find(item => item.id === eventId);
+      if (!event) throw new Error("未找到资讯事件");
+      return json(res, 200, {
+        eventId,
+        status: event.contentStatus || "pending",
+        attemptCount: Number(event.contentAttemptCount || 0),
+        retryAt: event.contentRetryAt || null,
+        error: event.contentError || null,
+        content: getInformationContent(eventId)
+      });
+    }
+    if (url.pathname === "/api/information-collection/prune" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("清理历史采集资讯前必须明确确认");
+      const sourceId = cleanText(body.sourceId);
+      const keepLatest = Number(body.keepLatest);
+      if (!sourceId) throw new Error("清理历史采集资讯必须指定来源");
+      if (!Number.isInteger(keepLatest) || keepLatest < 1 || keepLatest > 500) throw new Error("保留条数必须是 1–500 的整数");
+      const store = loadStore();
+      if (!store.informationSources.some(item => item.id === sourceId)) throw new Error("未找到资讯来源");
+      const removable = store.informationEvents
+        .filter(item => item.collectorSourceId === sourceId && item.status === "new" && !(item.assessmentIds || []).length)
+        .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+      const removeIds = new Set(removable.slice(keepLatest).map(item => item.id));
+      store.informationEvents = store.informationEvents.filter(item => !removeIds.has(item.id));
+      const createdAt = new Date().toISOString();
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-collection-pruned", sourceId, removedCount: removeIds.size, keepLatest, createdAt });
+      saveStore(store, "information-collection-prune");
+      return json(res, 200, { sourceId, removedCount: removeIds.size, keptCount: removable.length - removeIds.size, backupAvailable: true });
+    }
+    if (url.pathname === "/api/information-events" && req.method === "GET") {
+      const store = loadStore();
+      let events = [...store.informationEvents];
+      if (url.searchParams.get("status")) events = events.filter(item => item.status === url.searchParams.get("status"));
+      if (url.searchParams.get("assetCode")) events = events.filter(item => (item.assetCodes || []).includes(url.searchParams.get("assetCode")));
+      if (url.searchParams.get("industryTag")) {
+        const tag = cleanText(url.searchParams.get("industryTag"));
+        events = events.filter(item => (item.industryTags || []).some(t => t.includes(tag) || tag.includes(t)));
+      }
+      if (url.searchParams.get("industry")) {
+        const industry = cleanText(url.searchParams.get("industry"));
+        events = events.filter(item => (item.industryTags || []).some(t => {
+          const tLower = t.toLowerCase();
+          const iLower = industry.toLowerCase();
+          return tLower.includes(iLower) || iLower.includes(tLower);
+        }));
+      }
+      events.sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)));
+      const limit = Number(url.searchParams.get("limit") || 0);
+      if (limit > 0) events = events.slice(0, limit);
+      return json(res, 200, { events });
+    }
+    if (url.pathname === "/api/company-relations" && req.method === "GET") {
+      const store = loadStore();
+      const assetCode = cleanText(url.searchParams.get("assetCode"));
+      const relations = assetCode ? store.companyRelations.filter(item => item.assetCode === assetCode) : store.companyRelations;
+      return json(res, 200, { relations: [...relations].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) });
+    }
+    if (url.pathname === "/api/company-relations/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      return json(res, 200, { relation: normalizeCompanyRelation(body.input || body, store) });
+    }
+    if (url.pathname === "/api/company-relations" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存公司关系前必须明确确认");
+      const store = loadStore();
+      const relation = normalizeCompanyRelation(body.input || body, store);
+      const duplicate = store.companyRelations.find(item => item.contentHash === relation.contentHash);
+      if (duplicate) return json(res, 200, { relation: duplicate, duplicate: true });
+      store.companyRelations.push(relation);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "company-relation-created", relationId: relation.id, assetCode: relation.assetCode, stage: relation.stage, createdAt: relation.createdAt });
+      saveStore(store, "company-relation");
+      return json(res, 201, { relation, duplicate: false });
+    }
+    if (url.pathname === "/api/information-events/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const event = normalizeInformationEvent(body.input || body);
+      const duplicate = store.informationEvents.find(item => item.originalHash === event.originalHash);
+      return json(res, 200, { event, duplicateId: duplicate?.id || null });
+    }
+    if (url.pathname === "/api/information-events" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存资讯事件前必须明确确认");
+      const store = loadStore();
+      const event = normalizeInformationEvent(body.input || body);
+      const duplicate = store.informationEvents.find(item => item.originalHash === event.originalHash);
+      if (duplicate) return json(res, 200, { event: duplicate, duplicate: true });
+      store.informationEvents.push(event);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-event-created", eventId: event.id, originalHash: event.originalHash, createdAt: event.createdAt });
+      saveStore(store, "information-event");
+      return json(res, 201, { event, duplicate: false });
+    }
+    const informationEventStatusRoute = url.pathname.match(/^\/api\/information-events\/([^/]+)\/status$/);
+    if (informationEventStatusRoute && req.method === "PUT") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const event = store.informationEvents.find(item => item.id === decodeURIComponent(informationEventStatusRoute[1]));
+      if (!event) throw new Error("未找到资讯事件");
+      if (!["new", "assessing", "reviewed", "archived"].includes(body.status)) throw new Error("资讯事件状态不合法");
+      event.status = body.status;
+      event.updatedAt = new Date().toISOString();
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-event-status", eventId: event.id, status: event.status, createdAt: event.updatedAt });
+      saveStore(store, "information-event-status");
+      return json(res, 200, { event });
+    }
+    const holdingImpactConfirmationRoute = url.pathname.match(/^\/api\/information-events\/([^/]+)\/holding-impact-confirmations$/);
+    if (holdingImpactConfirmationRoute && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("确认AI持仓影响前必须明确确认");
+      const store = loadStore();
+      const event = store.informationEvents.find(item => item.id === decodeURIComponent(holdingImpactConfirmationRoute[1]));
+      if (!event) throw new Error("未找到资讯事件");
+      if (processingState(event) !== "completed" || !event.aiEnrichment) throw new Error("该资讯尚未完成当前版本的AI影响评估");
+      const assetCode = cleanText(body.assetCode);
+      const holdingImpact = (event.aiEnrichment.holdingRelevance || []).find(item => item.assetCode === assetCode);
+      if (!holdingImpact) throw new Error("该资讯没有对应持仓的AI影响结论");
+      const decision = cleanText(body.decision);
+      if (!new Set(["confirmed", "rejected"]).has(decision)) throw new Error("确认结果必须是confirmed或rejected");
+      const note = cleanText(body.note).slice(0, 500);
+      const previous = [...store.informationImpactConfirmations].reverse().find(item => (
+        item.eventId === event.id && item.assetCode === assetCode && item.inputHash === event.aiEnrichment.inputHash && item.ruleVersion === event.aiEnrichment.ruleVersion
+      ));
+      if (previous?.decision === decision && previous?.note === note) {
+        const hadPromotion = Boolean(previous.promotionId);
+        const promotion = decision === "confirmed" ? promoteConfirmedInformationImpact(store, event, previous, holdingImpact) : null;
+        if (promotion && !hadPromotion) saveStore(store, "information-evidence-promotion");
+        return json(res, 200, { confirmation: previous, promotion, duplicate: true });
+      }
+      const confirmedAt = new Date().toISOString();
+      const confirmation = {
+        id: `information-impact-confirmation-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        eventId: event.id,
+        assetId: holdingImpact.assetId || canonicalAssetId(assetCode),
+        assetCode,
+        assetName: holdingImpact.assetName,
+        inputHash: event.aiEnrichment.inputHash,
+        ruleVersion: event.aiEnrichment.ruleVersion,
+        decision,
+        note,
+        supersedesId: previous?.id || null,
+        confirmedBy: "local-user",
+        confirmedAt
+      };
+      store.informationImpactConfirmations.push(confirmation);
+      const promotion = promoteConfirmedInformationImpact(store, event, confirmation, holdingImpact);
+      event.updatedAt = confirmedAt;
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "information-holding-impact-confirmed", confirmationId: confirmation.id, promotionId: promotion?.id || null, eventId: event.id, assetCode, decision, createdAt: confirmedAt });
+      saveStore(store, "information-holding-impact-confirmation");
+      return json(res, 201, { confirmation, promotion, duplicate: false });
+    }
+    if (url.pathname === "/api/discipline-assessments/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      return json(res, 200, evaluateDisciplineV2(body.input || body));
+    }
+    if (url.pathname === "/api/discipline-assessments" && req.method === "GET") {
+      const store = loadStore();
+      let assessments = [...store.disciplineAssessments];
+      if (url.searchParams.get("tradeId")) assessments = assessments.filter(item => item.tradeId === url.searchParams.get("tradeId"));
+      if (url.searchParams.get("date")) assessments = assessments.filter(item => item.date === url.searchParams.get("date"));
+      return json(res, 200, { assessments, summary: summarizeDisciplineV2(assessments.map(item => item.result)) });
+    }
+    if (url.pathname === "/api/discipline-assessments" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存纪律评估前必须明确确认");
+      const store = loadStore();
+      const input = body.input || {};
+      if (input.tradeId && !store.trades.some(item => String(item.id) === String(input.tradeId))) throw new Error("未找到纪律评估对应的成交记录");
+      const result = evaluateDisciplineV2(input);
+      const createdAt = new Date().toISOString();
+      const assessment = {
+        id: `discipline-assessment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        tradeId: input.tradeId || null,
+        date: input.date || createdAt.slice(0, 10),
+        assetCode: input.assetCode || null,
+        inputHash: contentHash(input),
+        input: JSON.parse(JSON.stringify(input)),
+        result,
+        createdAt
+      };
+      store.disciplineAssessments.push(assessment);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "discipline-assessment-created", assessmentId: assessment.id, tradeId: assessment.tradeId, createdAt });
+      saveStore(store, "discipline-assessment");
+      return json(res, 201, { assessment });
+    }
+    if (url.pathname === "/api/influence-assessments/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      return json(res, 200, evaluateInfluence(body.input || body));
+    }
+    if (url.pathname === "/api/influence-assessments" && req.method === "GET") {
+      const store = loadStore();
+      let assessments = [...store.influenceAssessments];
+      if (url.searchParams.get("assetCode")) assessments = assessments.filter(item => item.assetCode === url.searchParams.get("assetCode"));
+      if (url.searchParams.get("eventId")) assessments = assessments.filter(item => item.eventId === url.searchParams.get("eventId"));
+      return json(res, 200, { assessments });
+    }
+    if (url.pathname === "/api/influence-assessments" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存影响因子评估前必须明确确认");
+      const store = loadStore();
+      const input = body.input || {};
+      const result = evaluateInfluence(input);
+      const createdAt = new Date().toISOString();
+      const assessment = {
+        id: `influence-assessment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        eventId: input.eventId || null,
+        assetCode: input.assetCode || null,
+        inputHash: contentHash(input),
+        input: JSON.parse(JSON.stringify(input)),
+        result,
+        createdAt
+      };
+      store.influenceAssessments.push(assessment);
+      const informationEvent = store.informationEvents.find(item => item.id === assessment.eventId);
+      if (informationEvent) {
+        informationEvent.status = "assessing";
+        informationEvent.assessmentIds = [...new Set([...(informationEvent.assessmentIds || []), assessment.id])];
+        informationEvent.updatedAt = createdAt;
+      }
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "influence-assessment-created", assessmentId: assessment.id, eventId: assessment.eventId, assetCode: assessment.assetCode, createdAt });
+      saveStore(store, "influence-assessment");
+      return json(res, 201, { assessment });
+    }
+    if (url.pathname === "/api/probability-reports/preview" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const input = probabilityInputWithCalibration(store, body.input || body);
+      validateProbabilityReportInput(input);
+      return json(res, 200, buildProbabilityReport(input));
+    }
+    if (url.pathname === "/api/probability-calibration" && req.method === "GET") {
+      const store = loadStore();
+      return json(res, 200, summarizeProbabilityCalibration(store.probabilityReports || [], store.forecastResolutions || [], {
+        modelId: cleanText(url.searchParams.get("modelId")) || BAYESIAN_MODEL_VERSION,
+        horizon: cleanText(url.searchParams.get("horizon")) || null
+      }));
+    }
+    if (url.pathname === "/api/probability-reports" && req.method === "GET") {
+      const store = loadStore();
+      let reports = [...store.probabilityReports];
+      if (url.searchParams.get("assetCode")) reports = reports.filter(item => item.assetCode === url.searchParams.get("assetCode"));
+      return json(res, 200, { reports, resolutions: store.forecastResolutions });
+    }
+    if (url.pathname === "/api/probability-reports" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("保存概率研报前必须明确确认");
+      const store = loadStore();
+      const input = probabilityInputWithCalibration(store, body.input || {});
+      validateProbabilityReportInput(input);
+      const result = buildProbabilityReport(input);
+      const createdAt = new Date().toISOString();
+      const inputHash = contentHash(input);
+      const duplicate = store.probabilityReports.find(item => item.inputHash === inputHash);
+      if (duplicate) return json(res, 200, { report: duplicate, duplicate: true });
+      const report = {
+        id: `probability-report-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        assetCode: input.asset?.code || input.assetCode || null,
+        inputHash,
+        input: JSON.parse(JSON.stringify(input)),
+        ...result,
+        createdAt
+      };
+      store.probabilityReports.push(report);
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "probability-report-created", reportId: report.id, assetCode: report.assetCode, createdAt });
+      saveStore(store, "probability-report");
+      return json(res, 201, { report, duplicate: false });
+    }
+    const probabilityResolveRoute = url.pathname.match(/^\/api\/probability-reports\/([^/]+)\/resolve$/);
+    if (probabilityResolveRoute && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("结算概率研报前必须明确确认");
+      const store = loadStore();
+      const reportId = decodeURIComponent(probabilityResolveRoute[1]);
+      const report = store.probabilityReports.find(item => item.id === reportId);
+      if (!report) throw new Error("未找到待结算的概率研报");
+      if (store.forecastResolutions.some(item => item.forecastId === reportId)) throw new Error("该概率研报已经结算，历史结果不可覆盖");
+      const resolution = resolveForecast(report, body.resolution || body);
+      store.forecastResolutions.push(resolution);
+      const calibration = summarizeProbabilityCalibration(store.probabilityReports || [], store.forecastResolutions || [], {
+        modelId: report.calibration?.modelId || BAYESIAN_MODEL_VERSION,
+        horizon: report.horizon || null
+      });
+      store.auditLog.push({ id: `audit-${Date.now()}`, type: "probability-report-resolved", reportId, actualOutcome: resolution.actualOutcome, createdAt: resolution.resolvedAt });
+      saveStore(store, "probability-report-resolution");
+      return json(res, 201, { resolution, calibration });
     }
     if (url.pathname === "/api/plans" && req.method === "GET") {
       const store = loadStore();
@@ -2590,6 +4261,43 @@ const server = http.createServer(async (req, res) => {
       saveStore(store, "planned-asset-archived");
       return json(res, 200, { asset, store });
     }
+    const assetIndustryInfoRoute = url.pathname.match(/^\/api\/planned-assets\/([^/]+)\/industry-info$/);
+    if (assetIndustryInfoRoute && req.method === "GET") {
+      const store = loadStore();
+      const asset = store.plannedAssets.find(item => item.id === decodeURIComponent(assetIndustryInfoRoute[1]));
+      if (!asset) return json(res, 404, { error: "未找到计划标的" });
+      const industry = cleanText(asset.industry);
+      let industryEvents = [];
+      let directEvents = [];
+      if (industry) {
+        const industryLower = industry.toLowerCase();
+        industryEvents = store.informationEvents.filter(item =>
+          (item.industryTags || []).some(t => {
+            const tLower = t.toLowerCase();
+            return tLower.includes(industryLower) || industryLower.includes(tLower);
+          })
+        );
+      }
+      if (asset.code) {
+        directEvents = store.informationEvents.filter(item =>
+          (item.assetCodes || []).includes(String(asset.code))
+        );
+      }
+      const allRelatedIds = new Set([...industryEvents.map(e => e.id), ...directEvents.map(e => e.id)]);
+      const aiProcessedCount = [...allRelatedIds].filter(id => {
+        const event = store.informationEvents.find(e => e.id === id);
+        return event && processingState(event) === "completed";
+      }).length;
+      return json(res, 200, {
+        assetCode: asset.code,
+        assetName: asset.name,
+        industry,
+        industryEventCount: industryEvents.length,
+        directEventCount: directEvents.length,
+        totalRelatedCount: allRelatedIds.size,
+        aiProcessedCount
+      });
+    }
     if (url.pathname === "/api/evidence" && req.method === "GET") {
       const store = loadStore();
       const assetCode = cleanText(url.searchParams.get("assetCode"));
@@ -2643,6 +4351,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/backups" && req.method === "GET") {
       return json(res, 200, { backups: listBackups() });
+    }
+    if (url.pathname === "/api/storage/status" && req.method === "GET") {
+      return json(res, 200, storageStatus());
+    }
+    if (url.pathname === "/api/storage/compact" && req.method === "POST") {
+      const body = await readBody(req);
+      if (body.confirmed !== true) throw new Error("整理存储前必须明确确认");
+      return json(res, 200, compactStorage());
     }
     if (url.pathname === "/api/backups/restore" && req.method === "POST") {
       const body = await readBody(req);
@@ -2773,6 +4489,23 @@ const server = http.createServer(async (req, res) => {
       saveStore(store, "research-plan");
       return json(res, 200, { ...result, store });
     }
+    if (url.pathname === "/api/trades/discipline-preview" && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const tradeDate = String(body.date || localDateKey());
+      const applicablePlan = store.plans.find(plan => plan.planForDate === tradeDate && plan.status === "active");
+      const matchedRule = (applicablePlan?.rules || []).find(rule => String(rule.code) === String(body.code));
+      normalizeTradeIdentity(store, body, matchedRule);
+      body.premarketPlanExists = Boolean(applicablePlan && matchedRule);
+      body.planId = applicablePlan?.id || null;
+      body.planVersion = applicablePlan?.version || null;
+      body.planSnapshotKey = applicablePlan ? `${applicablePlan.id}:v${applicablePlan.version}` : null;
+      body.planHash = applicablePlan?.contentHash || null;
+      body.matchedRuleCode = matchedRule?.code || null;
+      const trade = normalizeTrade(body);
+      const input = buildTradeDisciplineInput(store, trade, { reviewComplete: false });
+      return json(res, 200, { input, result: evaluateDisciplineV2(input) });
+    }
     if (url.pathname === "/api/trades" && req.method === "POST") {
       const body = await readBody(req);
       const store = loadStore();
@@ -2789,7 +4522,15 @@ const server = http.createServer(async (req, res) => {
       body.matchedRuleCode = matchedRule?.code || null;
       const trade = normalizeTrade(body);
       validateTradeForPosting(store, trade);
+      trade.assetId = canonicalAssetId(trade.code, trade.market);
+      trade.decisionContext = decisionContextForTrade(store, trade, applicablePlan, matchedRule, {
+        accountBefore: accountSummary(store)
+      });
       const disciplineEvents = evaluateDiscipline(store, trade, applicablePlan, matchedRule);
+      const disciplineInput = buildTradeDisciplineInput(store, trade, { reviewComplete: false });
+      if (trade.actualPositionPct == null && disciplineInput.risk.actualPositionPct != null) trade.actualPositionPct = disciplineInput.risk.actualPositionPct;
+      if (trade.actualRiskPct == null && disciplineInput.risk.actualRiskPct != null) trade.actualRiskPct = disciplineInput.risk.actualRiskPct;
+      const disciplinePreview = evaluateDisciplineV2(disciplineInput);
       trade.disciplineEventIds = disciplineEvents.map(item => item.id);
       trade.violations = [...new Set([...detectViolations(store, trade), ...disciplineEvents.map(item => item.title)])];
       trade.accountApplied = true;
@@ -2798,7 +4539,17 @@ const server = http.createServer(async (req, res) => {
       appendTradeEvent(store, trade);
       store.auditLog.push({ id: `audit-${Date.now()}`, type: "trade-created", tradeId: trade.id, date: trade.date, planId: trade.planId, planVersion: trade.planVersion, disciplineEventIds: trade.disciplineEventIds, createdAt: new Date().toISOString() });
       saveStore(store, "trade");
-      return json(res, 201, { trade, disciplineEvents, store });
+      return json(res, 201, { trade, disciplineEvents, disciplinePreview, store });
+    }
+    const tradeDisciplinePreviewRoute = url.pathname.match(/^\/api\/trades\/([^/]+)\/discipline-preview$/);
+    if (tradeDisciplinePreviewRoute && req.method === "POST") {
+      const body = await readBody(req);
+      const store = loadStore();
+      const tradeId = decodeURIComponent(tradeDisciplinePreviewRoute[1]);
+      const trade = store.trades.find(item => String(item.id) === tradeId);
+      if (!trade) return json(res, 404, { error: "未找到这笔成交" });
+      const input = buildTradeDisciplineInput(store, trade, { ...body, reviewComplete: body.reviewComplete === true });
+      return json(res, 200, { input, result: evaluateDisciplineV2(input) });
     }
     const tradeRecordRoute = url.pathname.match(/^\/api\/trades\/([^/]+)$/);
     if (tradeRecordRoute && req.method === "PUT") {
@@ -3028,7 +4779,7 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const message = String(error.message || "");
     if (/数据已被其他操作更新/.test(message)) return json(res, 409, { error: message });
-    const isClientError = /必须|不能|超过|未找到|不存在|格式|数量|价格|费用|计划|CSV|取消整批|现金不足|达到.*上限/.test(message);
+    const isClientError = /必须|不能|已经|超过|未找到|不存在|格式|数量|价格|费用|计划|CSV|取消整批|现金不足|达到.*上限|发生变化|不匹配|不属于|不一致/.test(message);
     return json(res, isClientError ? 400 : 500, { error: message });
   }
 });
@@ -3090,10 +4841,37 @@ async function closingRefreshTick() {
   finally { closeRefreshRunning = false; }
 }
 
+async function informationCollectionTick() {
+  if (informationCollectionRunning || process.env.TRADE_INFORMATION_COLLECTION_ENABLED === "false") return;
+  try {
+    const store = loadStore();
+    const now = Date.now();
+    const dueIds = store.informationSources
+      .filter(source => source.enabled && (!source.nextRunAt || new Date(source.nextRunAt).getTime() <= now))
+      .map(source => source.id);
+    if (dueIds.length) await runInformationCollection(dueIds, "automatic");
+  } catch (error) {
+    console.error("自动资讯采集失败：", error.message);
+  }
+}
+
+async function informationContentTick() {
+  if (informationContentRunning || process.env.TRADE_INFORMATION_CONTENT_ENABLED === "false") return;
+  try {
+    await runInformationContentFetch(null, "automatic", INFORMATION_CONTENT_BATCH_SIZE);
+  } catch (error) {
+    console.error("自动原文补抓失败：", error.message);
+  }
+}
+
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`交易纪律助手已启动：http://127.0.0.1:${PORT}`);
   setTimeout(closingRefreshTick, 2000);
   setInterval(closingRefreshTick, 60 * 1000);
+  setTimeout(informationCollectionTick, 5000);
+  setInterval(informationCollectionTick, 60 * 1000);
+  setTimeout(informationContentTick, 12000);
+  setInterval(informationContentTick, 60 * 1000);
   if (!process.env.TRADE_DATA_DIR && process.env.TRADE_AUTO_STOCK_REFRESH !== "false") {
     setTimeout(() => refreshStockCatalog().catch(error => console.error("证券目录自动更新失败：", error.message)), 2500);
     setInterval(() => refreshStockCatalog().catch(error => console.error("证券目录自动更新失败：", error.message)), 60 * 60 * 1000);

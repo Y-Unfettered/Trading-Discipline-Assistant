@@ -41,6 +41,18 @@
 - 对无计划新增风险、动作越界、仓位超限、单笔风险超限和触发条件缺失进行分级提示
 - 计划失效只改变当前执行状态，不删除历史确认、证据和成交关联
 
+## 纪律与资讯决策闭环
+
+- 盘中成交先生成临时纪律预览，盘后补齐复盘事实后才形成正式逐笔纪律分；盈亏与过程分分开。
+- 首页展示今日正式纪律分、待评估成交、重大违规、最近 20 次决策分和一个当前训练目标。
+- “资讯影响中心”使用可搜索、可排序、可分页的资讯库；没有 AI 时按时间展示，AI 完整整理后可按阅读优先级展示。
+- 自动采集器支持零费用官方来源和 NewsNow 聚合来源。首批推荐来源包括财联社、华尔街见闻、金十、格隆汇、雪球、澎湃、微博和知乎；每个来源使用独立随机窗口，付费 X 接口仍被阻止。
+- 后台会安全补抓公开原文并独立保存到本地 SQLite；财联社、华尔街见闻、金十和格隆汇使用逐站正文适配。内容区分完整文章、完整快讯、来源摘要和仅标题线索，AI 不会仅凭热榜标题生成事实判断。
+- 资讯影响中心采用“来源列表 + 可收起运行面板”的桌面双栏布局，实时显示采集、正文队列、有效内容覆盖率和最近运行记录。
+- AI 整理使用与模型厂商无关的任务和回写接口，Codex 或其他代理都必须遵守同一份 schema；AI 不可用不会影响采集、正文保存和阅读。
+- 标的详情包含九段公司传导关系图。支持或反证结论必须引用事实卡，关键节点缺证据时不生成公司影响分。
+- “概率研报”冻结比较基准、周期、三情景阈值、信号证据和模型版本；冷启动时只展示相对证据权重。
+
 ## v0.2 可信账本基线
 
 - 使用本地 SQLite 事务保存应用状态，首次启动会自动导入原有 `data/store.json`
@@ -61,8 +73,31 @@
 
 ## 启动
 
+### 推荐：一次启动全部本地服务
+
+这个项目实际包含两个必须同时运行的本机服务：
+
+| 服务 | 地址 | 用途 |
+|---|---|---|
+| 交易纪律助手 | `http://127.0.0.1:3768` | 页面、账本、纪律、AI整理和概率研报 |
+| 本地 NewsNow | `http://127.0.0.1:4444` | 财联社、华尔街见闻等聚合资讯来源 |
+
+正常启动必须使用下面任意一种方式，它们都会同时启动两个服务：
+
 ```powershell
 npm start
+```
+
+或者在 PowerShell 中运行：
+
+```powershell
+.\start.ps1
+```
+
+需要在后台运行、不保持当前窗口时，使用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-background.ps1
 ```
 
 浏览器打开：
@@ -70,6 +105,48 @@ npm start
 ```text
 http://127.0.0.1:3768
 ```
+
+不要把下面的命令当作正常启动方式：
+
+```powershell
+node server.js
+```
+
+它只会启动3768主应用，不会启动4444 NewsNow，因此资讯影响中心会显示“本机 NewsNow 聚合服务未连接”。该命令只适合开发人员单独调试主服务。
+
+### 出现“本机 NewsNow 离线”时
+
+在 `D:\交易` 中运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-background.ps1
+```
+
+等待约5秒后刷新资讯影响中心。也可以检查两个服务：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:3768/api/information-runtime
+Invoke-RestMethod 'http://127.0.0.1:4444/api/s?id=cls-hot'
+```
+
+第一条结果中的 `newsNow.online` 应为 `true`；第二条应返回财联社热门资讯列表。
+
+如果提示本地 NewsNow 尚未构建，只需执行一次：
+
+```powershell
+npm run newsnow:install
+npm run newsnow:build
+powershell -ExecutionPolicy Bypass -File .\start-background.ps1
+```
+
+运行日志位于：
+
+```text
+D:\交易\logs\server.log
+D:\交易\logs\server-error.log
+```
+
+联合启动器会监控它自己启动的NewsNow子进程；如果NewsNow意外退出，会等待2秒后自动重新启动。
 
 程序只监听 `127.0.0.1`，不会主动开放给局域网。
 
@@ -79,11 +156,11 @@ http://127.0.0.1:3768
 npm test
 ```
 
-测试覆盖账本重放、部分卖出、费用后补、现金与持仓校正、SQLite 迁移、CSV 整批回滚，以及 v0.3 的计划标的、证据约束、显式确认、版本追踪、纪律事件、首次设置和旧计划安全升级。
+测试覆盖账本重放、部分卖出、费用后补、现金与持仓校正、SQLite 迁移、CSV 整批回滚，以及计划标的、证据约束、计划确认、逐笔纪律评分、资讯去重、随机采集、公司传导关系、影响评估和概率结算。
 
 ## 数据与隐私
 
-- `data/trade-discipline.sqlite`：本地主数据库
+- `data/trade-discipline.sqlite`：本地主数据库，同时保存独立的资讯原文正文表
 - `data/store.json`：兼容镜像，便于人工恢复
 - `data/backups/`：写入前的本地 JSON 备份
 - `reports/`：复盘数据包与 Markdown 报告
@@ -152,3 +229,18 @@ python skills\trade-discipline-assistant\scripts\trade_assistant_client.py stock
 - `POST /api/analysis/import`：必须传入 `confirmed: true`，不覆盖旧报告。
 
 Skill 明确禁止自动下单；券商成交、持仓和资金始终是事实源，高影响写入和计划确认必须由用户明确授权。
+
+## 纪律、影响因子与概率研报规则
+
+项目现在包含三套与代理无关的纯规则模块：
+
+- `lib/discipline-engine.js`：逐笔六维纪律分、硬风险上限、记录完整度和周期自查；盈亏不进入纪律分；
+- `lib/influence-engine.js`：来源/内容双评分、事件强度和政策到公司的九段传导链；
+- `lib/probability-engine.js`：冷启动保护、概率发布门槛和到期 Brier 结算。
+
+规则通过 `GET /api/rulebooks` 查询。三类对象均支持先 `/preview`、再由用户确认保存；正式记录保存输入哈希和规则版本，不覆盖历史。详细说明见：
+
+- `docs/规则体系-v2-交易纪律闭环.md`
+- `docs/规则体系-v1-资讯影响与概率研报闭环.md`
+- `docs/规则体系-v2-落地映射与验收.md`
+- `docs/资讯采集来源调研-v1.md`

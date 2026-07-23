@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ChartCandlestick, ChevronRight, Landmark, ShieldCheck, WalletCards } from 'lucide-vue-next'
+import { ChartCandlestick, ChevronRight, CircleAlert, Landmark, ListChecks, ShieldCheck, Target, WalletCards } from 'lucide-vue-next'
 import DataTable, { type DataTableColumn } from '@/components/app/DataTable.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -17,6 +17,7 @@ const workflow = computed(() => props.dashboard?.dailyWorkflow || { tasks: [], c
 const completionPct = computed(() => workflow.value.tasks.length ? Math.round(workflow.value.completedCount / workflow.value.tasks.length * 100) : 0)
 const nextTask = computed(() => workflow.value.tasks.find((task: any) => !task.completed && !task.optional))
 const latestQuote = computed(() => (props.store?.holdings || []).map((item: any) => item.quoteUpdatedAt).filter(Boolean).sort().at(-1))
+const disciplineV2 = computed(() => props.dashboard?.disciplineV2 || {})
 const holdingColumns: DataTableColumn[] = [
   { key: 'stock', label: '股票' },
   { key: 'quantity', label: '数量' },
@@ -52,6 +53,12 @@ const disciplineMetrics = computed(() => [
   { label: '计划执行率', value: props.dashboard?.discipline?.planFollowRate == null ? '暂无' : `${props.dashboard.discipline.planFollowRate}%` },
   { label: '累计费用', value: money(props.dashboard?.discipline?.fees) },
 ])
+const disciplineV2Metrics = computed(() => [
+  { label: '今日正式纪律分', value: disciplineV2.value.todayScore == null ? '待完成' : `${disciplineV2.value.todayScore} 分`, detail: `${disciplineV2.value.assessedCount || 0} / ${disciplineV2.value.todayTradeCount || 0} 笔已评估` },
+  { label: '待正式评估', value: `${disciplineV2.value.pendingAssessmentCount || 0} 笔`, detail: '盘中检查不能替代盘后正式评分' },
+  { label: '今日严重违规', value: `${disciplineV2.value.criticalAssessmentCount || 0} 笔`, detail: '严重规则不会被平均分抵消' },
+  { label: '最近20次决策', value: disciplineV2.value.rolling20Score == null ? '样本不足' : `${disciplineV2.value.rolling20Score} 分`, detail: `已结算 ${disciplineV2.value.rolling20Count || 0} 次` },
+])
 </script>
 
 <template>
@@ -84,6 +91,17 @@ const disciplineMetrics = computed(() => [
           <CardTitle class="text-3xl tracking-tight">{{ metric.value }}</CardTitle>
           <CardDescription>{{ metric.detail }}</CardDescription>
         </CardHeader>
+      </Card>
+    </section>
+
+    <section class="grid items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
+      <Card class="shadow-none">
+        <CardHeader><div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><CardTitle class="flex items-center gap-2"><ListChecks class="size-5 text-red-600" />纪律评分闭环</CardTitle><CardDescription>只评价过程，不用单笔盈亏倒推决策质量。</CardDescription></div><Button size="sm" variant="outline" @click="emit('navigate', 'postmarket')">处理逐笔评估<ChevronRight class="size-4" /></Button></div></CardHeader>
+        <CardContent class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><div v-for="item in disciplineV2Metrics" :key="item.label" class="rounded-lg border bg-muted/40 p-3"><p class="text-xs text-muted-foreground">{{ item.label }}</p><p class="mt-1 text-xl font-semibold">{{ item.value }}</p><p class="mt-1 text-xs leading-5 text-muted-foreground">{{ item.detail }}</p></div></CardContent>
+      </Card>
+      <Card class="shadow-none">
+        <CardHeader><CardTitle class="flex items-center gap-2"><Target class="size-5 text-red-600" />当前唯一训练目标</CardTitle><CardDescription>完成后再替换下一条，不同时堆叠十几条建议。</CardDescription></CardHeader>
+        <CardContent><Alert :variant="disciplineV2.criticalAssessmentCount ? 'destructive' : 'default'"><component :is="disciplineV2.criticalAssessmentCount ? CircleAlert : ShieldCheck" class="size-4" /><AlertTitle>{{ disciplineV2.pendingAssessmentCount ? '先完成未评估成交' : '本阶段纠正目标' }}</AlertTitle><AlertDescription>{{ disciplineV2.trainingTarget || '继续按已确认触发和风险边界执行。' }}</AlertDescription></Alert></CardContent>
       </Card>
     </section>
 

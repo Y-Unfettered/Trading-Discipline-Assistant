@@ -13,11 +13,14 @@ test("intraday action cards are compact, plan-driven, and expandable", () => {
   assert.match(page, /md:grid-cols-2 xl:grid-cols-3/);
   assert.match(page, /关键执行条件/);
   assert.match(page, /信息不足时/);
-  assert.match(page, /完整盘中计划/);
+  assert.match(page, /完整执行边界/);
   assert.match(page, /日期总原则/);
   assert.match(page, /动作与风险/);
   assert.match(page, /三种情景/);
   assert.match(page, /执行边界/);
+  assert.match(page, /当前仓位风险/);
+  assert.match(page, /公司逻辑待核验/);
+  assert.match(page, /只显示条件、边界与失效，不预测当日涨跌/);
   assert.match(page, /@click="openRuleDetail\(card\)"/);
 });
 
@@ -42,4 +45,15 @@ test("buy entry restores searchable stock matching and never asks for a manual c
   assert.match(stockPicker, /@compositionstart="onCompositionStart"/);
   assert.match(stockPicker, /@compositionend="onCompositionEnd"/);
   assert.match(stockPicker, /choose\(stock\)/);
+});
+
+test("trade entry records a decision snapshot and previews discipline before saving", () => {
+  assert.match(page, /成交时纪律快照/);
+  assert.match(page, /v-model="form\.riskEffect"/);
+  assert.match(page, /v-model="form\.thesisStatus"/);
+  assert.match(page, /v-model="form\.trendState"/);
+  assert.match(page, /v-model="form\.triggerSatisfied"/);
+  assert.match(page, /v-model="form\.stopChange"/);
+  assert.match(page, /\/api\/trades\/discipline-preview/);
+  assert.match(page, /正式分将在盘后逐笔复盘完成后生成/);
 });

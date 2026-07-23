@@ -30,6 +30,8 @@ import PostmarketPage from '@/pages/PostmarketPage.vue'
 import FundsPage from '@/pages/FundsPage.vue'
 import StockPnlPage from '@/pages/StockPnlPage.vue'
 import DataPage from '@/pages/DataPage.vue'
+import InfluencePage from '@/pages/InfluencePage.vue'
+import ProbabilityPage from '@/pages/ProbabilityPage.vue'
 import { api, dateTime, money, type TradeDashboard, type TradeStore } from '@/lib/trade-api'
 
 const navGroups = [
@@ -39,7 +41,7 @@ const navGroups = [
       { label: '纪律驾驶舱', page: 'overview', icon: LayoutDashboard },
       { label: '交易标的中心', page: 'assets', icon: Target },
       { label: '下一交易日计划', page: 'plan', icon: CalendarCheck2 },
-      { label: '盘中行动卡', page: 'intraday', icon: ClipboardCheck },
+      { label: '盘中执行边界', page: 'intraday', icon: ClipboardCheck },
       { label: '盘后核对与复盘', page: 'postmarket', icon: BookOpenCheck },
     ],
   },
@@ -48,6 +50,8 @@ const navGroups = [
     items: [
       { label: '资金轨迹', page: 'funds', icon: CircleDollarSign },
       { label: '个股盈亏', page: 'stock-pnl', icon: BarChart3 },
+      { label: '资讯影响中心', page: 'influence', icon: ChartNoAxesCombined },
+      { label: '概率研报', page: 'probability', icon: BarChart3 },
       { label: '数据与恢复', page: 'data', icon: Database },
     ],
   },
@@ -278,6 +282,8 @@ onUnmounted(() => {
           @refresh="loadData" @navigate="navigate" />
         <FundsPage v-else-if="currentPage === 'funds'" :store="store" :dashboard="dashboard" @refresh="loadData" @navigate="navigate" />
         <StockPnlPage v-else-if="currentPage === 'stock-pnl'" :store="store" />
+        <InfluencePage v-else-if="currentPage === 'influence'" :store="store" :dashboard="dashboard" @refresh="loadData" />
+        <ProbabilityPage v-else-if="currentPage === 'probability'" :store="store" :dashboard="dashboard" @refresh="loadData" />
         <DataPage v-else-if="currentPage === 'data'" :store="store" @refresh="loadData" />
       </main>
       <Button v-if="showBackToTop" class="absolute bottom-24 right-6" size="icon" variant="outline" aria-label="返回顶部" title="返回顶部" @click="scrollWorkspaceToTop"><ArrowUp class="size-4" /></Button>

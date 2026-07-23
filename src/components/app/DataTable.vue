@@ -33,6 +33,7 @@ const props = withDefaults(defineProps<{
   initialSortKey?: string
   initialSortDesc?: boolean
   pageSize?: number
+  searchKeys?: string[]
 }>(), {
   rowKey: 'id',
   searchPlaceholder: '搜索表格内容',
@@ -47,7 +48,8 @@ const sorting = ref<SortingState>(props.initialSortKey ? [{ id: props.initialSor
 const filteredData = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase('zh-CN')
   if (!keyword) return props.data
-  return props.data.filter(row => props.columns.some(column => String(row[column.key] ?? '').toLocaleLowerCase('zh-CN').includes(keyword)))
+  const keys = [...new Set([...props.columns.map(column => column.key), ...(props.searchKeys || [])])]
+  return props.data.filter(row => keys.some(key => String(row[key] ?? '').toLocaleLowerCase('zh-CN').includes(keyword)))
 })
 const tableColumns: ColumnDef<DataRow>[] = props.columns.map(column => ({
   accessorKey: column.key,
@@ -110,7 +112,11 @@ watch(query, () => table.setPageIndex(0))
         </TableHeader>
         <TableBody>
           <TableRow v-for="row in table.getRowModel().rows" :key="row.id">
-            <TableCell v-for="cell in row.getVisibleCells()" :key="cell.id">{{ formatValue(row.original, columnMeta(cell)) }}</TableCell>
+            <TableCell v-for="cell in row.getVisibleCells()" :key="cell.id">
+              <slot :name="`cell-${columnMeta(cell).key}`" :row="row.original" :value="row.original[columnMeta(cell).key]">
+                {{ formatValue(row.original, columnMeta(cell)) }}
+              </slot>
+            </TableCell>
           </TableRow>
           <TableRow v-if="!table.getRowModel().rows.length"><TableCell :colspan="columns.length" class="h-24 text-center text-muted-foreground">{{ emptyMessage }}</TableCell></TableRow>
         </TableBody>
